@@ -187,13 +187,25 @@ func TestRollback_MultiServicePreservesAnchor(t *testing.T) {
 	}
 }
 
-func TestDeployProxyStrategyNotImplemented(t *testing.T) {
-	e, _ := engineFixture()
-	svc := e.Cfg.Services["web"]
-	svc.Cutover.Strategy = "proxy"
-	e.Cfg.Services["web"] = svc
-	err := e.Deploy(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "not implemented") {
-		t.Fatalf("want not-implemented error for proxy, got %v", err)
+func TestDeployProxyStrategyRoutesCutover(t *testing.T) {
+	t.Setenv("APP_API_KEY", "s3cr3t")
+	e, f := engineFixture()
+	e.Cfg.Secrets.FromEnv = []string{"APP_API_KEY"}
+	e.Cfg.Services["web"] = bgService()
+	f.Stub("state.json", `{"current_tag":"v1"}`, nil)
+	f.Stub("query-gpu", "0, 2000\n1, 40960\n", nil)
+	f.Stub("ps -q web-blue", "cid-blue\n", nil)
+	if err := e.Deploy(context.Background()); err != nil {
+		t.Fatalf("deploy: %v", err)
+	}
+	all := strings.Join(f.Commands, "\n")
+	if !strings.Contains(all, "up -d --no-deps web-green") {
+		t.Fatalf("proxy strategy must start the inactive color:\n%s", all)
+	}
+	if !strings.Contains(all, ".dockrail/demo/nginx/web.conf") {
+		t.Fatalf("proxy strategy must flip nginx upstream:\n%s", all)
+	}
+	if !strings.Contains(all, "set -a; . $HOME/.dockrail/demo/env; set +a; TAG=v2") {
+		t.Fatalf("proxy compose commands must source secrets prefix:\n%s", all)
 	}
 }
