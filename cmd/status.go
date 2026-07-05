@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 
@@ -13,7 +14,7 @@ import (
 )
 
 func newStatusCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "show deployed and running image tags per service",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -22,17 +23,25 @@ func newStatusCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			asJSON, _ := cmd.Flags().GetBool("json")
 			conn := connection.New(cfg.Target)
-			return runStatus(cmd.Context(), conn, cfg, cmd.OutOrStdout())
+			return runStatus(cmd.Context(), conn, cfg, cmd.OutOrStdout(), asJSON)
 		},
 	}
+	cmd.Flags().Bool("json", false, "emit machine-readable JSON instead of text")
+	return cmd
 }
 
-func runStatus(ctx context.Context, conn connection.Connection, cfg *config.Config, out io.Writer) error {
+func runStatus(ctx context.Context, conn connection.Connection, cfg *config.Config, out io.Writer, asJSON bool) error {
 	e := &engine.Engine{Conn: conn, Cfg: cfg, Out: out}
 	rep, err := e.Status(ctx)
 	if err != nil {
 		return err
+	}
+	if asJSON {
+		enc := json.NewEncoder(out)
+		enc.SetIndent("", "  ")
+		return enc.Encode(rep)
 	}
 	fmt.Fprintf(out, "current_tag:  %s\n", rep.CurrentTag)
 	fmt.Fprintf(out, "previous_tag: %s\n", rep.PreviousTag)

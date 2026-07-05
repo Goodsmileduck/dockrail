@@ -31,6 +31,7 @@ dockrail deploy --dry-run   # print the plan without mutating the host
 dockrail deploy             # pull, recreate, wait for readiness, cut over
 dockrail rollback           # restore the previously deployed image tag
 dockrail status             # show deployed + running tag per service
+dockrail status --json      # same, as machine-readable JSON (for agents/scripts)
 dockrail logs web --tail 50 # show a service's logs on the target host
 dockrail --version
 ```
