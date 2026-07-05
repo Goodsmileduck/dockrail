@@ -4,10 +4,15 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"regexp"
 	"time"
 
 	"gopkg.in/yaml.v3"
 )
+
+// projectRe restricts project names to characters safe for shell paths and
+// container/upstream names.
+var projectRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 type Config struct {
 	Project  string             `yaml:"project"`
@@ -72,6 +77,12 @@ func Load(path string) (*Config, error) {
 func (c *Config) validate() error {
 	if c.Project == "" {
 		return fmt.Errorf("project is required")
+	}
+	// project is interpolated into host shell paths ($HOME/.dockrail/<project>/…)
+	// and container/upstream names; restrict it to a safe charset so it cannot
+	// word-split or inject.
+	if !projectRe.MatchString(c.Project) {
+		return fmt.Errorf("project %q must match %s", c.Project, projectRe.String())
 	}
 	if c.Compose == "" {
 		return fmt.Errorf("compose is required")

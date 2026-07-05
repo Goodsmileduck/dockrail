@@ -8,6 +8,32 @@ import (
 	"github.com/goodsmileduck/dockrail/connection"
 )
 
+func TestWriteSecretsFileIsInjectionSafe(t *testing.T) {
+	f := connection.NewFake()
+	// A value that would break a naive heredoc/quoting: contains the old
+	// delimiter on its own line, single quotes, and shell metacharacters.
+	nasty := "line1\nDDEOF\nrm -rf ~\n'; echo pwned; '"
+	prefix, err := writeSecretsFile(context.Background(), f, "demo",
+		map[string]string{"APP_API_KEY": nasty})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(f.Commands, "\n")
+	// The raw dangerous strings must never appear as shell text — they are
+	// carried base64-encoded and decoded on the target.
+	for _, bad := range []string{"rm -rf ~", "echo pwned", "DDEOF"} {
+		if strings.Contains(joined, bad) {
+			t.Fatalf("secret content %q leaked into shell command:\n%s", bad, joined)
+		}
+	}
+	if !strings.Contains(joined, "base64 -d") {
+		t.Fatalf("expected base64 transport:\n%s", joined)
+	}
+	if !strings.Contains(prefix, ".dockrail/demo/env") {
+		t.Fatalf("prefix must source the env-file, got %q", prefix)
+	}
+}
+
 func TestCollectSecretsErrorsOnMissing(t *testing.T) {
 	t.Setenv("APP_API_KEY", "abc")
 	_, err := collectSecrets([]string{"APP_API_KEY", "APP_DB_CONNECTION_URL"})

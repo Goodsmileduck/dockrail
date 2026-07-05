@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
 	"github.com/goodsmileduck/dockrail/config"
 	"github.com/goodsmileduck/dockrail/connection"
@@ -26,10 +25,11 @@ func registryLogin(ctx context.Context, conn connection.Connection, reg config.R
 		fmt.Fprintf(out, "registry: no DOCKRAIL_REGISTRY_USER/PASSWORD set — skip login, assuming host is authenticated to %s\n", reg.Server)
 		return nil
 	}
-	// escape single quotes in the password for the POSIX printf
-	esc := strings.ReplaceAll(pass, `'`, `'\''`)
-	cmd := fmt.Sprintf("printf '%%s' '%s' | docker login %s --username %s --password-stdin",
-		esc, reg.Server, user)
+	// Every host-sourced value (password, server, username) is single-quoted so
+	// shell metacharacters cannot break the command or inject; the password is
+	// additionally kept out of argv via --password-stdin.
+	cmd := fmt.Sprintf("printf %%s %s | docker login %s --username %s --password-stdin",
+		shQuote(pass), shQuote(reg.Server), shQuote(user))
 	if _, err := conn.Run(ctx, cmd); err != nil {
 		return fmt.Errorf("docker login %s: %w", reg.Server, err)
 	}

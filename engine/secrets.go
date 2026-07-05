@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"sort"
@@ -41,14 +42,18 @@ func writeSecretsFile(ctx context.Context, conn connection.Connection, project s
 	sort.Strings(names)
 	var b strings.Builder
 	for _, n := range names {
-		// single-quote the value; escape embedded single quotes for POSIX sh
-		v := strings.ReplaceAll(secrets[n], `'`, `'\''`)
-		fmt.Fprintf(&b, "export %s='%s'\n", n, v)
+		// shQuote the value so the sourced file is valid POSIX shell regardless
+		// of what the value contains.
+		fmt.Fprintf(&b, "export %s=%s\n", n, shQuote(secrets[n]))
 	}
-	dir := fmt.Sprintf("$HOME/.dockrail/%s", project)
+	// Transport the file body base64-encoded and decode on the target. base64
+	// output is pure [A-Za-z0-9+/=], so no secret value can break out of the
+	// command, collide with a heredoc delimiter, or reach the shell as code.
+	enc := base64.StdEncoding.EncodeToString([]byte(b.String()))
+	dir := fmt.Sprintf("$HOME/.dockrail/%s", project) // project is validated to a safe charset by config
 	path := dir + "/env"
-	cmd := fmt.Sprintf("mkdir -p %s && umask 177 && cat > %s <<'DDEOF'\n%sDDEOF\nchmod 600 %s",
-		dir, path, b.String(), path)
+	cmd := fmt.Sprintf("mkdir -p %s && umask 177 && printf %%s %s | base64 -d > %s && chmod 600 %s",
+		dir, enc, path, path)
 	if _, err := conn.Run(ctx, cmd); err != nil {
 		return "", fmt.Errorf("write secrets file: %w", err)
 	}
