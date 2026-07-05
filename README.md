@@ -8,10 +8,9 @@ It is agentless: it drives the target host through the system `ssh` binary
 (with connection multiplexing) and `docker` / `docker compose` already
 installed there. No daemon, no agent to install.
 
-> **Status:** early. The `deploy` (recreate cutover, `http` readiness,
-> `--dry-run`), `rollback`, `status`, `logs`, and `check` commands are
-> implemented and tested. The `proxy` cutover and `gpu` placement remain
-> stubbed and return `not implemented`.
+> **Status:** early. The `deploy` (`recreate` and `proxy` cutover, `http`,
+> `tcp`, and `vllm` readiness, `--dry-run`), `rollback`, `status`, `logs`, and
+> `check` commands are implemented and tested.
 
 ## Install
 
@@ -89,6 +88,42 @@ services:
       timeout: 900s
     cutover:
       strategy: recreate
+```
+
+## Proxy Cutover and GPU Placement
+
+`cutover.strategy: proxy` uses blue-green Compose services named
+`<service>-blue` and `<service>-green`. The service's `cutover.proxy` value is
+the nginx container name that should be reloaded after dockrail writes
+`$HOME/.dockrail/<project>/nginx/<service>.conf`.
+
+Your nginx config must include the generated fragments:
+
+```nginx
+include /home/deploy/.dockrail/myapp/nginx/*.conf;
+```
+
+GPU-backed proxy services should map `${DOCKRAIL_GPU}` into their device
+reservation. During a free-slot cutover, dockrail starts the inactive color
+with `DOCKRAIL_GPU=<index>`, waits for readiness, flips nginx, then stops the
+old color. A GPU is considered free when `nvidia-smi` reports
+`memory.free >= vram_min * 1.2`, leaving 20% headroom for KV-cache growth.
+
+If no configured GPU has enough free VRAM and `on_no_free_gpu:
+stop-old-first`, dockrail stops the old color first to free VRAM, starts the
+new color, waits for readiness, and flips nginx. If readiness fails in this
+sequenced path, dockrail automatically restarts the old color and records the
+failure. With `on_no_free_gpu: fail`, dockrail aborts before mutating
+containers.
+
+```yaml
+services:
+  parse-agent:
+    image_tag: v2
+    model: Qwen2.5-VL
+    readiness: { type: vllm, port: 8000, timeout: 900s }
+    cutover:   { strategy: proxy, proxy: mlops-nginx }
+    placement: { type: gpu, pool: [0, 1], vram_min: 18GiB, on_no_free_gpu: stop-old-first }
 ```
 
 ## Secrets & private registries
