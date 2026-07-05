@@ -1,6 +1,14 @@
 # GPU-Aware Blue-Green Cutover — Design Spec
 
-**Status:** Design draft — needs your review before a plan is written. Several decisions below are marked **[DECIDE]**; defaults are proposed but not settled.
+**Status:** Design settled (decisions resolved 2026-07-05). Ready to turn into an implementation plan. Resolved choices are recorded in "Decisions (resolved)" below; the inline **[DECIDE]** notes are kept for rationale but each now has a chosen answer.
+
+## Decisions (resolved)
+
+1. **VRAM headroom → safety factor ×1.2.** A GPU in `pool` is a free slot when `memory.free >= vram_min * 1.2`. The 20% reserves room for KV-cache growth so a second copy doesn't OOM under load. `vram_min` = base model footprint.
+2. **GPU→container binding → dockrail assigns `DOCKRAIL_GPU`.** dockrail picks the free GPU index and exports `DOCKRAIL_GPU=<idx>`; the compose file maps it (`deploy.resources.reservations.devices[].device_ids: ['${DOCKRAIL_GPU}']`). This is the compose convention the dogfood project repos must adopt for GPU services. Enables true blue-green on a free GPU.
+3. **nginx flip → upstream rewrite with distinct blue/green services.** green and blue are separate compose services; dockrail rewrites the nginx `upstream` block to the ready container and `nginx -s reload`. Both containers are alive during the flip (zero gap) on the free-slot path; the `stop-old-first` path degrades to a sequenced flip with a gap. dockrail owns/templates the nginx upstream fragment.
+4. **warmup → no-op stub for v1.** `cutover.warmup` is parsed but does nothing in v1; "model served in `/v1/models`" (the vllm readiness probe) is treated as ready enough. Real warmup requests are a follow-up.
+5. **stop-old-first green failure → auto-rollback to blue.** Because dockrail stopped blue to free VRAM, on green readiness failure it automatically re-pulls and restarts blue's previous tag (reusing `Rollback` machinery) and records the failure in state. The `fail` branch (nothing changed) stays manual.
 
 ## Problem
 
