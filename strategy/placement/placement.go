@@ -16,6 +16,8 @@ func New(p config.Placement) (Placer, error) {
 	switch p.Type {
 	case "", "none":
 		return None{}, nil
+	case "gpu":
+		return newGPU(p)
 	default:
 		return nil, fmt.Errorf("placement type %q not implemented yet", p.Type)
 	}
