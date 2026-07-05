@@ -8,10 +8,10 @@ It is agentless: it drives the target host through the system `ssh` binary
 (with connection multiplexing) and `docker` / `docker compose` already
 installed there. No daemon, no agent to install.
 
-> **Status:** early. The `recreate` cutover, `http` readiness, `check`
-> preflight, and `deploy --dry-run` paths are implemented and tested. The
-> `proxy` cutover, `gpu` placement, and `rollback` / `status` / `logs`
-> subcommands are stubbed and return `not implemented`.
+> **Status:** early. The `deploy` (recreate cutover, `http` readiness,
+> `--dry-run`), `rollback`, `status`, `logs`, and `check` commands are
+> implemented and tested. The `proxy` cutover and `gpu` placement remain
+> stubbed and return `not implemented`.
 
 ## Install
 
@@ -29,6 +29,9 @@ Or grab a prebuilt binary from the [Releases](../../releases) page.
 dockrail check              # validate config + probe target host readiness
 dockrail deploy --dry-run   # print the plan without mutating the host
 dockrail deploy             # pull, recreate, wait for readiness, cut over
+dockrail rollback           # restore the previously deployed image tag
+dockrail status             # show deployed + running tag per service
+dockrail logs web --tail 50 # show a service's logs on the target host
 dockrail --version
 ```
 

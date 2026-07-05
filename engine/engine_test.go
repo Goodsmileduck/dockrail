@@ -37,12 +37,12 @@ func TestDeployHappyPathCommandOrder(t *testing.T) {
 	// ordered milestones of the recreate sequence:
 	milestones := []string{
 		"docker version",      // preflight
-		"pull",                // step 1
-		"state.json",          // step 2: read anchor
+		"state.json",          // read anchor (once, before any service)
+		"pull",                // recreate: pull NEW
 		"stop web",            // recreate: stop OLD
 		"up -d --no-deps web", // start NEW
-		"curl",                // step 5: probe
-		"image prune",         // step 8
+		"curl",                // probe
+		"image prune",         // finalize
 	}
 	last := -1
 	for _, m := range milestones {
@@ -92,6 +92,78 @@ func TestDeployReleasesLock(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(f.Commands, "\n"), "rmdir $HOME/.dockrail/demo/lock") {
 		t.Error("lock not released after deploy")
+	}
+}
+
+func TestRollback_NoPreviousTag(t *testing.T) {
+	e, f := engineFixture()
+	f.Stub("state.json", `{"current_tag":"v2"}`, nil)
+	err := e.Rollback(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "no previous") {
+		t.Fatalf("want 'no previous' error, got %v", err)
+	}
+	for _, c := range f.Commands {
+		if strings.Contains(c, "up -d") || strings.Contains(c, "stop web") {
+			t.Fatalf("rollback mutated host despite no previous tag: %q", c)
+		}
+	}
+}
+
+func TestRollback_RestoresPreviousTag(t *testing.T) {
+	e, f := engineFixture()
+	f.Stub("state.json", `{"previous_tag":"v1","current_tag":"v2"}`, nil)
+	if err := e.Rollback(context.Background()); err != nil {
+		t.Fatalf("rollback: %v", err)
+	}
+	cmds := strings.Join(f.Commands, "\n")
+	if !strings.Contains(cmds, "TAG=v1 docker compose -f docker-compose.yml pull web") {
+		t.Fatalf("expected pull of previous tag v1, got:\n%s", cmds)
+	}
+	if !strings.Contains(cmds, "TAG=v1 docker compose -f docker-compose.yml up -d --no-deps web") {
+		t.Fatalf("expected up of previous tag v1, got:\n%s", cmds)
+	}
+	var saved string
+	for _, c := range f.Commands {
+		if strings.Contains(c, "state.json") && strings.Contains(c, "cat >") {
+			saved = c
+		}
+	}
+	if !strings.Contains(saved, `"current_tag":"v1"`) || !strings.Contains(saved, `"previous_tag":"v2"`) {
+		t.Fatalf("state not swapped after rollback, got: %q", saved)
+	}
+}
+
+func TestRollback_MultiServicePreservesAnchor(t *testing.T) {
+	f := connection.NewFake()
+	f.Stub("state.json", `{"previous_tag":"v1","current_tag":"v2"}`, nil)
+	cfg := &config.Config{
+		Project: "demo", Compose: "docker-compose.yml",
+		Services: map[string]config.Service{
+			"web": {ImageTag: "v2",
+				Readiness: config.Readiness{Type: "http", Path: "/health", Port: 8010, Timeout: "1s"},
+				Cutover:   config.Cutover{Strategy: "recreate"}},
+			"worker": {ImageTag: "v2",
+				Readiness: config.Readiness{Type: "http", Path: "/health", Port: 8020, Timeout: "1s"},
+				Cutover:   config.Cutover{Strategy: "recreate"}},
+		},
+	}
+	e := &Engine{Conn: f, Cfg: cfg, Out: &bytes.Buffer{}}
+	if err := e.Rollback(context.Background()); err != nil {
+		t.Fatalf("rollback: %v", err)
+	}
+	// State must be written exactly once, regardless of service count, so the
+	// anchor (previous_tag) is not clobbered by a second service's save.
+	var saves []string
+	for _, c := range f.Commands {
+		if strings.Contains(c, "cat >") && strings.Contains(c, "state.json") {
+			saves = append(saves, c)
+		}
+	}
+	if len(saves) != 1 {
+		t.Fatalf("expected exactly one state save, got %d:\n%v", len(saves), saves)
+	}
+	if !strings.Contains(saves[0], `"current_tag":"v1"`) || !strings.Contains(saves[0], `"previous_tag":"v2"`) {
+		t.Fatalf("anchor not preserved: %q", saves[0])
 	}
 }
 

@@ -23,17 +23,11 @@ func NewRootCmd() *cobra.Command {
 	}
 	root.PersistentFlags().StringP("config", "c", "deploy.yml", "path to deploy.yml")
 
-	for _, name := range []string{"rollback", "status", "logs"} {
-		root.AddCommand(&cobra.Command{
-			Use:   name,
-			Short: name,
-			RunE: func(cmd *cobra.Command, args []string) error {
-				return fmt.Errorf("%s: not implemented", name)
-			},
-		})
-	}
 	root.AddCommand(newDeployCmd())
 	root.AddCommand(newCheckCmd())
+	root.AddCommand(newRollbackCmd())
+	root.AddCommand(newStatusCmd())
+	root.AddCommand(newLogsCmd())
 	return root
 }
 
