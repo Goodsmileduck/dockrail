@@ -12,7 +12,7 @@ import (
 )
 
 func TestNewHTTP(t *testing.T) {
-	p, err := New(config.Readiness{Type: "http", Path: "/health", Port: 8010, Timeout: "90s"})
+	p, err := New(config.Readiness{Type: "http", Path: "/health", Port: 8010, Timeout: "90s"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,8 +23,8 @@ func TestNewHTTP(t *testing.T) {
 }
 
 func TestNewUnknownType(t *testing.T) {
-	if _, err := New(config.Readiness{Type: "vllm"}); err == nil {
-		t.Error("vllm not implemented in this plan; want error")
+	if _, err := New(config.Readiness{Type: "bogus"}, ""); err == nil {
+		t.Error("unknown readiness type; want error")
 	}
 }
 

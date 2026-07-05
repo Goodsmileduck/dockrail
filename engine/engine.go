@@ -128,7 +128,7 @@ func (e *Engine) recreate(ctx context.Context, name string, svc config.Service, 
 	if !safeTag.MatchString(tag) {
 		return fmt.Errorf("unsafe image tag %q", tag)
 	}
-	prober, err := readiness.New(svc.Readiness)
+	prober, err := readiness.New(svc.Readiness, svc.Model)
 	if err != nil {
 		return err
 	}
