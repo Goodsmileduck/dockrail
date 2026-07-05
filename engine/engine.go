@@ -58,6 +58,9 @@ func (e *Engine) Deploy(ctx context.Context) error {
 	if err != nil {
 		return e.recordFailure(ctx, st, fmt.Sprintf("secrets: %v", err), err)
 	}
+	if err := registryLogin(ctx, e.Conn, e.Cfg.Registry, e.Out); err != nil {
+		return e.recordFailure(ctx, st, fmt.Sprintf("registry login: %v", err), err)
+	}
 
 	var deployed string
 	for name, svc := range e.Cfg.Services {
@@ -99,6 +102,9 @@ func (e *Engine) Rollback(ctx context.Context) error {
 	prefix, err := writeSecretsFile(ctx, e.Conn, e.Cfg.Project, secrets)
 	if err != nil {
 		return e.recordFailure(ctx, st, fmt.Sprintf("secrets: %v", err), err)
+	}
+	if err := registryLogin(ctx, e.Conn, e.Cfg.Registry, e.Out); err != nil {
+		return e.recordFailure(ctx, st, fmt.Sprintf("registry login: %v", err), err)
 	}
 	for name, svc := range e.Cfg.Services {
 		if err := e.recreate(ctx, name, svc, target, prefix); err != nil {
