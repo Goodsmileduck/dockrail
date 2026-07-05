@@ -60,6 +60,26 @@ func TestDeployHappyPathCommandOrder(t *testing.T) {
 	}
 }
 
+func TestDeployWritesSecretsBeforePull(t *testing.T) {
+	t.Setenv("APP_API_KEY", "s3cr3t")
+	e, f := engineFixture()
+	e.Cfg.Secrets.FromEnv = []string{"APP_API_KEY"}
+	f.Stub("state.json", `{"current_tag":"v1"}`, nil)
+	if err := e.Deploy(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	all := strings.Join(f.Commands, "\n")
+	envIdx := strings.Index(all, ".dockrail/demo/env")
+	pullIdx := strings.Index(all, "pull")
+	if envIdx < 0 || pullIdx < 0 || envIdx > pullIdx {
+		t.Fatalf("env-file must be written before pull:\n%s", all)
+	}
+	// every compose command must source the env-file
+	if !strings.Contains(all, "set -a; . $HOME/.dockrail/demo/env") {
+		t.Fatalf("compose commands must source secrets:\n%s", all)
+	}
+}
+
 func TestDeployReadinessFailureRecordsAndErrors(t *testing.T) {
 	e, f := engineFixture()
 	f.Stub("curl", "", errors.New("refused"))
