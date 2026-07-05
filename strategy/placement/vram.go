@@ -27,5 +27,5 @@ func parseMiB(s string) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("invalid vram size %q: %w", s, err)
 	}
-	return int(v * float64(mult)), nil
+	return int(v*float64(mult) + 0.5), nil // round, not truncate
 }

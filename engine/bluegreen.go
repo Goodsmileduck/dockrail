@@ -104,9 +104,12 @@ func (e *Engine) proxyCutover(ctx context.Context, name string, svc config.Servi
 			return fmt.Errorf("start green: %w", err)
 		}
 		if err := prober.Probe(ctx, e.Conn); err != nil {
-			// Auto-rollback: green never became ready and blue is down.
+			// Auto-rollback: green never became ready and blue is down. Use
+			// `start`, not `up -d`, to restart blue's existing stopped container
+			// as-is — `up -d` would recreate it with the NEW TAG (the broken
+			// image that just failed), which is not a rollback at all.
 			e.logf("green failed readiness; auto-rolling back to %s", blueSvc)
-			_, _ = e.Conn.Run(ctx, e.composeCmd(prefix, tag, "", "up -d --no-deps", blueSvc))
+			_, _ = e.Conn.Run(ctx, fmt.Sprintf("docker compose -f %s start %s", e.Cfg.Compose, blueSvc))
 			return fmt.Errorf("green readiness failed, rolled back to blue: %w", err)
 		}
 		return flipUpstream(ctx, e.Conn, e.Cfg.Project, svc.Cutover.Proxy, name, target, svc.Readiness.Port)

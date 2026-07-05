@@ -105,8 +105,12 @@ func TestProxyCutoverAutoRollback(t *testing.T) {
 		t.Fatal("want cutover error")
 	}
 	all := strings.Join(f.Commands, "\n")
-	// blue must be brought back up after green failed
-	if !strings.Contains(all, "up -d --no-deps web-blue") {
-		t.Fatalf("auto-rollback must restart blue:\n%s", all)
+	// blue must be restarted with `start` (not `up -d`) so its ORIGINAL image
+	// is preserved — `up -d` would recreate it with the new (broken) TAG.
+	if !strings.Contains(all, "start web-blue") {
+		t.Fatalf("auto-rollback must `start` blue:\n%s", all)
+	}
+	if strings.Contains(all, "TAG=v2 docker compose -f docker-compose.yml up -d --no-deps web-blue") {
+		t.Fatalf("auto-rollback must NOT recreate blue with the new tag:\n%s", all)
 	}
 }
