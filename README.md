@@ -67,6 +67,22 @@ services:
 Host deploy state (previous/current tag, last failure) lives on the target in
 `~/.dockrail/<project>/state.json`, guarded by a per-project deploy lock.
 
+## Secrets & private registries
+
+`secrets.from_env` lists required environment variable names that `dockrail`
+reads from its own process environment, such as the invoking shell or CI job.
+Those values are forwarded to the target in a mode-600 env-file at
+`~/.dockrail/<project>/env`, and every `docker compose` command sources that
+file. If any listed variable is unset or empty, deploy aborts before any
+service pull or recreate.
+
+When `registry.server` is set, `dockrail` reads `DOCKRAIL_REGISTRY_USER` and
+`DOCKRAIL_REGISTRY_PASSWORD` from its own environment. If both are present, it
+runs `docker login` on the target before pulling images; if either is missing,
+it skips login and assumes the host is already authenticated. Secret values are
+written to the target env-file or login pipe, but are not passed as command
+arguments to later compose commands or `docker login`.
+
 ## Development
 
 ```bash
