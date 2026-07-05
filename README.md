@@ -67,6 +67,30 @@ services:
 Host deploy state (previous/current tag, last failure) lives on the target in
 `~/.dockrail/<project>/state.json`, guarded by a per-project deploy lock.
 
+## Readiness
+
+`http` readiness polls the configured path on `localhost:<port>` from the
+target host. `tcp` waits for the configured port to accept connections and
+defaults to a 60s timeout.
+
+`vllm` waits for `http://localhost:<port>/health` and, when `model:` is set on
+the service, waits for that model id to appear in `/v1/models`. Its default
+timeout is 600s because loading model weights can take minutes; override it
+with `readiness.timeout`.
+
+```yaml
+services:
+  parse-agent:
+    image_tag: v2
+    model: Qwen2.5-VL
+    readiness:
+      type: vllm
+      port: 8000
+      timeout: 900s
+    cutover:
+      strategy: recreate
+```
+
 ## Secrets & private registries
 
 `secrets.from_env` lists required environment variable names that `dockrail`
