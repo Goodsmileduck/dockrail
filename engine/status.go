@@ -8,16 +8,16 @@ import (
 )
 
 type ServiceStatus struct {
-	Name       string
-	RunningTag string
-	Up         bool
+	Name       string `json:"name"`
+	RunningTag string `json:"running_tag"`
+	Up         bool   `json:"up"`
 }
 
 type StatusReport struct {
-	CurrentTag  string
-	PreviousTag string
-	LastFailure string
-	Services    []ServiceStatus
+	CurrentTag  string          `json:"current_tag"`
+	PreviousTag string          `json:"previous_tag"`
+	LastFailure string          `json:"last_failure,omitempty"`
+	Services    []ServiceStatus `json:"services"`
 }
 
 // Status reports the deployed tag pair from host state plus the live running

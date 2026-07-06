@@ -50,9 +50,21 @@ func (e *Engine) Deploy(ctx context.Context) error {
 	}
 	anchor := st.CurrentTag
 
+	secrets, err := collectSecrets(e.Cfg.Secrets.FromEnv)
+	if err != nil {
+		return e.recordFailure(ctx, st, fmt.Sprintf("secrets: %v", err), err)
+	}
+	prefix, err := writeSecretsFile(ctx, e.Conn, e.Cfg.Project, secrets)
+	if err != nil {
+		return e.recordFailure(ctx, st, fmt.Sprintf("secrets: %v", err), err)
+	}
+	if err := registryLogin(ctx, e.Conn, e.Cfg.Registry, e.Out); err != nil {
+		return e.recordFailure(ctx, st, fmt.Sprintf("registry login: %v", err), err)
+	}
+
 	var deployed string
 	for name, svc := range e.Cfg.Services {
-		if err := e.recreate(ctx, name, svc, svc.ImageTag); err != nil {
+		if err := e.cutover(ctx, name, svc, svc.ImageTag, prefix); err != nil {
 			return e.recordFailure(ctx, st, fmt.Sprintf("deploy %s tag %s: %v", name, svc.ImageTag, err),
 				fmt.Errorf("service %s: %w", name, err))
 		}
@@ -83,8 +95,19 @@ func (e *Engine) Rollback(ctx context.Context) error {
 	target := st.PreviousTag
 	anchor := st.CurrentTag
 	e.logf("step rollback: restoring tag %s", target)
+	secrets, err := collectSecrets(e.Cfg.Secrets.FromEnv)
+	if err != nil {
+		return e.recordFailure(ctx, st, fmt.Sprintf("secrets: %v", err), err)
+	}
+	prefix, err := writeSecretsFile(ctx, e.Conn, e.Cfg.Project, secrets)
+	if err != nil {
+		return e.recordFailure(ctx, st, fmt.Sprintf("secrets: %v", err), err)
+	}
+	if err := registryLogin(ctx, e.Conn, e.Cfg.Registry, e.Out); err != nil {
+		return e.recordFailure(ctx, st, fmt.Sprintf("registry login: %v", err), err)
+	}
 	for name, svc := range e.Cfg.Services {
-		if err := e.recreate(ctx, name, svc, target); err != nil {
+		if err := e.cutover(ctx, name, svc, target, prefix); err != nil {
 			return e.recordFailure(ctx, st, fmt.Sprintf("rollback %s tag %s: %v", name, target, err),
 				fmt.Errorf("service %s: %w", name, err))
 		}
@@ -98,18 +121,15 @@ func (e *Engine) Rollback(ctx context.Context) error {
 // explicit image tag. It performs no host-state I/O; the caller owns the
 // anchor read and the single finalize write. Deploy uses the service's
 // configured tag; Rollback uses the recorded previous tag.
-func (e *Engine) recreate(ctx context.Context, name string, svc config.Service, tag string) error {
-	if svc.Cutover.Strategy != "recreate" {
-		return fmt.Errorf("cutover strategy %q not implemented yet", svc.Cutover.Strategy)
-	}
+func (e *Engine) recreate(ctx context.Context, name string, svc config.Service, tag string, prefix string) error {
 	if !safeTag.MatchString(tag) {
 		return fmt.Errorf("unsafe image tag %q", tag)
 	}
-	prober, err := readiness.New(svc.Readiness)
+	prober, err := readiness.New(svc.Readiness, svc.Model)
 	if err != nil {
 		return err
 	}
-	compose := fmt.Sprintf("TAG=%s docker compose -f %s", tag, e.Cfg.Compose)
+	compose := fmt.Sprintf("%sTAG=%s docker compose -f %s", prefix, tag, e.Cfg.Compose)
 
 	e.logf("step pull: %s tag %s", name, tag)
 	if _, err := e.Conn.Run(ctx, fmt.Sprintf("%s pull %s", compose, name)); err != nil {
@@ -130,6 +150,17 @@ func (e *Engine) recreate(ctx context.Context, name string, svc config.Service, 
 	}
 	e.logf("deployed %s tag %s", name, tag)
 	return nil
+}
+
+func (e *Engine) cutover(ctx context.Context, name string, svc config.Service, tag string, prefix string) error {
+	switch svc.Cutover.Strategy {
+	case "recreate":
+		return e.recreate(ctx, name, svc, tag, prefix)
+	case "proxy":
+		return e.proxyCutover(ctx, name, svc, tag, prefix)
+	default:
+		return fmt.Errorf("cutover strategy %q not implemented yet", svc.Cutover.Strategy)
+	}
 }
 
 // finalize persists the swapped tag pair once and prunes dangling images. The

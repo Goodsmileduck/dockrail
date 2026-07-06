@@ -4,10 +4,15 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"regexp"
 	"time"
 
 	"gopkg.in/yaml.v3"
 )
+
+// projectRe restricts project names to characters safe for shell paths and
+// container/upstream names.
+var projectRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 type Config struct {
 	Project  string             `yaml:"project"`
@@ -73,6 +78,12 @@ func (c *Config) validate() error {
 	if c.Project == "" {
 		return fmt.Errorf("project is required")
 	}
+	// project is interpolated into host shell paths ($HOME/.dockrail/<project>/…)
+	// and container/upstream names; restrict it to a safe charset so it cannot
+	// word-split or inject.
+	if !projectRe.MatchString(c.Project) {
+		return fmt.Errorf("project %q must match %s", c.Project, projectRe.String())
+	}
 	if c.Compose == "" {
 		return fmt.Errorf("compose is required")
 	}
@@ -80,6 +91,11 @@ func (c *Config) validate() error {
 		return fmt.Errorf("at least one entry under services is required")
 	}
 	for name, s := range c.Services {
+		// service names become host container/upstream names (<name>-blue) and
+		// are interpolated into shell commands, so restrict them like project.
+		if !projectRe.MatchString(name) {
+			return fmt.Errorf("services.%s: name must match %s", name, projectRe.String())
+		}
 		if s.ImageTag == "" {
 			return fmt.Errorf("services.%s: image_tag is required", name)
 		}
@@ -97,6 +113,11 @@ func (c *Config) validate() error {
 		case "recreate", "proxy":
 		default:
 			return fmt.Errorf("services.%s: cutover.strategy must be recreate|proxy, got %q", name, s.Cutover.Strategy)
+		}
+		// proxy is the nginx container name passed to `docker exec`; it is
+		// interpolated into a shell command, so restrict its charset.
+		if s.Cutover.Proxy != "" && !projectRe.MatchString(s.Cutover.Proxy) {
+			return fmt.Errorf("services.%s: cutover.proxy must match %s", name, projectRe.String())
 		}
 		switch s.Placement.Type {
 		case "", "none":
