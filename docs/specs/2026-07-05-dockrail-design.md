@@ -165,8 +165,8 @@ target:                                    # v1 = one host
     proxy: jump@bastion.example.com        # ProxyJump host
     # proxy_command: "ssh -W %h:%p bastion" # alternative to proxy
 
-retain_containers: 5                       # stopped OLD containers kept as
-                                           # rollback targets (and their images)
+retain_containers: 5                       # deployed images kept as rollback
+                                           # targets, each with a saved log tail
 hooks_path: .dockrail/hooks                # default; see section 8
 
 secrets:
