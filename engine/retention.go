@@ -13,24 +13,19 @@ import (
 // svcName is the logical service; composeName the compose service whose
 // container is about to be replaced (e.g. "api" or "api-blue").
 func (e *Engine) captureLogs(ctx context.Context, svcName, composeName string) {
-	cid, err := e.Conn.Run(ctx, fmt.Sprintf("docker compose -f %s ps -q %s", e.Cfg.Compose, composeName))
-	if err != nil || strings.TrimSpace(cid) == "" {
-		return
-	}
-	cid = strings.TrimSpace(cid)
-	img, err := e.Conn.Run(ctx, fmt.Sprintf("docker inspect --format '{{.Config.Image}}' %s", cid))
-	if err != nil {
+	cid, img, err := e.runningImage(ctx, composeName)
+	if err != nil || cid == "" {
 		return
 	}
 	tag := "unknown"
-	if i := strings.LastIndex(strings.TrimSpace(img), ":"); i >= 0 {
-		tag = strings.TrimSpace(img)[i+1:]
+	if i := strings.LastIndex(img, ":"); i >= 0 {
+		tag = img[i+1:]
 	}
 	if !safeTag.MatchString(tag) {
 		tag = "unknown"
 	}
 	ts := time.Now().UTC().Format("20060102T150405Z")
-	dir := fmt.Sprintf("$HOME/.dockrail/%s/logs", e.Cfg.Project)
+	dir := projectDir(e.Cfg.Project) + "/logs"
 	dst := fmt.Sprintf("%s/%s-%s-%s.log", dir, svcName, tag, ts)
 	if _, err := e.Conn.Run(ctx, fmt.Sprintf(
 		"mkdir -p %s && docker logs --tail 1000 %s > %s 2>&1 || true", dir, cid, dst)); err != nil {
@@ -54,23 +49,27 @@ func (e *Engine) prune(ctx context.Context, h []Record) {
 			continue
 		}
 		seen[r.Tag] = true
-		imgs, err := e.Conn.Run(ctx, fmt.Sprintf("TAG=%s docker compose -f %s config --images", r.Tag, e.Cfg.Compose))
+		imgs, err := e.resolveImages(ctx, r.Tag)
 		if err != nil {
 			e.logf("warn: prune: resolve images for %s: %v", r.Tag, err)
 			continue
 		}
-		for _, img := range strings.Fields(imgs) {
-			// config --images echoes the interpolated tag back; only remove
-			// refs that actually end in the victim tag.
-			if !strings.HasSuffix(img, ":"+r.Tag) {
-				continue
+		// config --images echoes the interpolated tag back; only remove refs
+		// that actually end in the victim tag.
+		var victims []string
+		for _, img := range imgs {
+			if strings.HasSuffix(img, ":"+r.Tag) {
+				victims = append(victims, img)
 			}
-			if _, err := e.Conn.Run(ctx, fmt.Sprintf("docker image rm %s || true", img)); err != nil {
-				e.logf("warn: prune image %s: %v", img, err)
+		}
+		if len(victims) > 0 {
+			refs := strings.Join(victims, " ")
+			if _, err := e.Conn.Run(ctx, fmt.Sprintf("docker image rm %s", refs)); err != nil {
+				e.logf("warn: prune images %s: %v", refs, err)
 			}
 		}
 		if _, err := e.Conn.Run(ctx, fmt.Sprintf(
-			"rm -f $HOME/.dockrail/%s/logs/*-%s-*.log", e.Cfg.Project, r.Tag)); err != nil {
+			"rm -f %s/logs/*-%s-*.log", projectDir(e.Cfg.Project), r.Tag)); err != nil {
 			e.logf("warn: prune logs for %s: %v", r.Tag, err)
 		}
 	}

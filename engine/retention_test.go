@@ -51,7 +51,6 @@ func TestCaptureLogsNoopWhenSlotEmpty(t *testing.T) {
 func TestPruneRemovesOutOfWindowImagesAndLogs(t *testing.T) {
 	f := connection.NewFake()
 	f.Stub("TAG=v1 ", "registry.example.com/api:v1\n", nil)
-	f.Stub("TAG=v3 ", "registry.example.com/api:v3\n", nil)
 	e := &Engine{Conn: f, Cfg: minimalCfg(), Out: discard()}
 	e.Cfg.RetainContainers = 2
 	h := []Record{

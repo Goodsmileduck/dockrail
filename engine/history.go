@@ -22,8 +22,14 @@ type Record struct {
 	Outcome   string            `json:"outcome"`
 }
 
+// projectDir is the per-project state directory on the target host that holds
+// history, lock, logs, and the secrets env-file.
+func projectDir(project string) string {
+	return fmt.Sprintf("$HOME/.dockrail/%s", project)
+}
+
 func historyPath(project string) string {
-	return fmt.Sprintf("$HOME/.dockrail/%s/history.jsonl", project)
+	return projectDir(project) + "/history.jsonl"
 }
 
 func performer() string {
@@ -67,7 +73,7 @@ func appendRecord(ctx context.Context, conn connection.Connection, project strin
 	if err != nil {
 		return err
 	}
-	dir := fmt.Sprintf("$HOME/.dockrail/%s", project)
+	dir := projectDir(project)
 	cmd := fmt.Sprintf("mkdir -p %s && cat >> %s <<'DDEOF'\n%s\nDDEOF", dir, historyPath(project), raw)
 	_, err = conn.Run(ctx, cmd)
 	return err

@@ -145,17 +145,32 @@ func retainedTags(h []Record, n int) []string {
 // explicit rollback and retention.
 func retainWindow(cfg *config.Config) int { return cfg.RetainContainers }
 
-// imagePresent checks every service's image at the given tag exists on the
-// host, resolving repo names through compose itself.
-func (e *Engine) imagePresent(ctx context.Context, tag string) error {
+// resolveImages returns the fully-qualified image references compose maps for
+// the project at the given tag (e.g. registry.example.com/api:v1). The bare
+// tag alone is not a valid image reference, so both presence-checking and
+// retention resolve through compose.
+func (e *Engine) resolveImages(ctx context.Context, tag string) ([]string, error) {
 	out, err := e.Conn.Run(ctx, fmt.Sprintf("TAG=%s docker compose -f %s config --images", tag, e.Cfg.Compose))
+	if err != nil {
+		return nil, err
+	}
+	return strings.Fields(out), nil
+}
+
+// imagePresent checks that every image compose maps at the given tag exists on
+// the host. docker image inspect takes all refs in one call and exits non-zero
+// if any is missing.
+func (e *Engine) imagePresent(ctx context.Context, tag string) error {
+	imgs, err := e.resolveImages(ctx, tag)
 	if err != nil {
 		return err
 	}
-	for _, img := range strings.Fields(out) {
-		if _, err := e.Conn.Run(ctx, fmt.Sprintf("docker image inspect --format '{{.Id}}' %s", img)); err != nil {
-			return fmt.Errorf("image %s: %w", img, err)
-		}
+	if len(imgs) == 0 {
+		return nil
+	}
+	refs := strings.Join(imgs, " ")
+	if _, err := e.Conn.Run(ctx, fmt.Sprintf("docker image inspect --format '{{.Id}}' %s", refs)); err != nil {
+		return fmt.Errorf("image(s) %s: %w", refs, err)
 	}
 	return nil
 }
@@ -275,4 +290,23 @@ func (e *Engine) containerID(ctx context.Context, name string) (string, error) {
 		}
 	}
 	return "", nil
+}
+
+// runningImage resolves the running container id and its image reference for a
+// compose service. A blank id (no error) means the service is not up. Used by
+// status reporting and by log capture before a slot is recreated.
+func (e *Engine) runningImage(ctx context.Context, composeName string) (cid, image string, err error) {
+	out, err := e.Conn.Run(ctx, fmt.Sprintf("docker compose -f %s ps -q %s", e.Cfg.Compose, composeName))
+	if err != nil {
+		return "", "", err
+	}
+	cid = strings.TrimSpace(out)
+	if cid == "" {
+		return "", "", nil
+	}
+	img, err := e.Conn.Run(ctx, fmt.Sprintf("docker inspect --format '{{.Config.Image}}' %s", cid))
+	if err != nil {
+		return cid, "", err
+	}
+	return cid, strings.TrimSpace(img), nil
 }

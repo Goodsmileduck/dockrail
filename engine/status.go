@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strings"
 )
 
 type ServiceStatus struct {
@@ -38,20 +37,13 @@ func (e *Engine) Status(ctx context.Context) (StatusReport, error) {
 	sort.Strings(names)
 	for _, name := range names {
 		ss := ServiceStatus{Name: name}
-		cid, err := e.Conn.Run(ctx, fmt.Sprintf(
-			"docker compose -f %s ps -q %s", e.Cfg.Compose, name))
+		cid, img, err := e.runningImage(ctx, name)
 		if err != nil {
 			return StatusReport{}, fmt.Errorf("status %s: %w", name, err)
 		}
-		cid = strings.TrimSpace(cid)
 		if cid != "" {
 			ss.Up = true
-			img, err := e.Conn.Run(ctx, fmt.Sprintf(
-				"docker inspect --format '{{.Config.Image}}' %s", cid))
-			if err != nil {
-				return StatusReport{}, fmt.Errorf("status %s inspect: %w", name, err)
-			}
-			ss.RunningTag = strings.TrimSpace(img)
+			ss.RunningTag = img
 		}
 		rep.Services = append(rep.Services, ss)
 	}
