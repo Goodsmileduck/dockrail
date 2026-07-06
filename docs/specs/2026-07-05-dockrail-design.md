@@ -3,9 +3,10 @@
 **Date:** 2026-07-05
 **Status:** Draft for review
 **Working name:** `dockrail` (placeholder — rename before release)
-**Scope:** v1 (single-host) design for a new, standalone deployment CLI. the dogfood project is
-the first dogfood user; the tool is intended for general release to anyone
-running containers (especially self-hosted LLMs) on a single or home server.
+**Scope:** v1 (single-host) design for a new, standalone deployment CLI. An
+internal ML platform is the first dogfood user; the tool is intended for
+general release to anyone running containers (especially self-hosted LLMs) on
+a single or home server.
 
 ---
 
@@ -58,7 +59,12 @@ bridge networking instead of `network_mode: host`.
 6. Secrets injected via host `env_file`, never on the command line.
 7. `Notifier` interface with engine events from day one (no channel ships in
    v1 — CI exit codes + structured logs are the signal).
-8. Commands: `deploy` (with `--dry-run`), `rollback`, `status`, `logs`, `check`.
+8. Commands: `deploy` (with `--dry-run`), `rollback [TAG]`, `status`, `logs`,
+   `check`, `config` (print resolved config), `audit`, `lock` (acquire/release/
+   status).
+9. **Hooks**: executables in a hooks directory run at defined lifecycle points
+   (non-zero exit aborts); the escape hatch for notifications and CI gating
+   before any notifier channel ships.
 
 **Non-goals (deferred to v2+):** multi-host fan-out / roles / destinations ·
 managed/Traefik/Caddy proxy drivers or a shipped proxy · more inference engines
@@ -71,7 +77,7 @@ this tool only deploys).
 
 | ID | Decision | Status |
 |----|----------|--------|
-| D1 | Language = **Go** (single static binary; matches `our other CLIs`; strong SSH + cobra) | Locked |
+| D1 | Language = **Go** (single static binary; matches our other CLIs; strong SSH + cobra) | Locked |
 | D2 | Connection = **SSH-agentless** (Kamal model), or local exec when run on-host; same engine either way | Locked |
 | D3 | v1 = **single host**; multi-host deferred | Locked |
 | D4 | Engine = one state machine; generic vs LLM differ only by pluggable **Readiness / Cutover / Placement** strategies | Locked |
@@ -154,6 +160,14 @@ target:                                    # v1 = one host
   host: deploy@example.com
   port: 32
   # key via --ssh-key / agent; host key pinned in known_hosts
+  ssh:                                     # optional
+    keys: [~/.ssh/deploy_ed25519]          # explicit key files (else agent)
+    proxy: jump@bastion.example.com        # ProxyJump host
+    # proxy_command: "ssh -W %h:%p bastion" # alternative to proxy
+
+retain_containers: 5                       # stopped OLD containers kept as
+                                           # rollback targets (and their images)
+hooks_path: .dockrail/hooks                # default; see section 8
 
 secrets:
   from_env: [APP_API_KEY, APP_DB_CONNECTION_URL]   # → host env_file
@@ -186,6 +200,9 @@ Notes:
   flips — what used to be called blue-green.
 - **Image tag = code version; mount path = model version** — two independent,
   explicit axes (inherited from the June spec).
+- **`x-` extension keys** — any top-level key prefixed `x-` is ignored by
+  validation, so users can park YAML anchors/aliases and tooling metadata
+  without tripping the schema (same convention as compose and Kamal).
 
 ## 6. Deploy state machine
 
@@ -243,15 +260,38 @@ Invariant: **OLD keeps serving until NEW is proven ready.** A bare
 
 ## 8. Cross-cutting behaviours
 
-- **Rollback** — `dockrail rollback`: re-point proxy to the prior container
-  if still present, else re-pull+start the previous tag recorded in step 2.
-- **Deploy state on host** — the step-2 rollback anchor (previous tag +
-  container id) is persisted in a per-project state file **on the target host**,
-  so `rollback` and `status` work from any machine/CI runner, not just the one
-  that deployed.
+- **Rollback** — `dockrail rollback [TAG]`: with no argument, re-point proxy to
+  the prior container if still present, else re-pull+start the previous tag
+  recorded in step 2. With a `TAG`, roll back to any version still in the
+  retained set (see retention below); candidates are listed by `audit` and
+  `status`.
+- **Deploy state on host** — persisted in a per-project state file **on the
+  target host**, so `rollback` and `status` work from any machine/CI runner,
+  not just the one that deployed. The state file is an **append-only deploy
+  history**, one record per attempt: tag, container id, performer (local
+  `$USER`, overridable via `DOCKRAIL_PERFORMER` for CI), timestamp, outcome
+  (deployed / failed@step / rolled-back). The most recent successful record is
+  the step-2 rollback anchor; `dockrail audit` prints the history.
+- **Retention** — step 8 prunes by count: the last `retain_containers`
+  (default 5) stopped OLD containers and their images are kept as rollback
+  targets; older ones are removed. Failed NEW containers are exempt until the
+  next deploy's step 0 (forensics, below).
 - **Deploy lock** — a per-project lock file on the host guards the whole state
   machine; a second concurrent deploy fails fast with a clear message (stale
-  locks detectable via recorded pid/timestamp).
+  locks detectable via recorded pid/timestamp). `--lock-wait[=15m]` instead
+  polls until the lock frees or the timeout expires — for CI pipelines that
+  race. Manual control: `dockrail lock acquire -m "reason"` / `release` /
+  `status`; a manually acquired lock is never auto-waited past.
+- **Hooks** — extensionless executables in `hooks_path` (default
+  `.dockrail/hooks`), run on the machine invoking the deploy at fixed
+  lifecycle points: `pre-connect`, `pre-deploy`, `pre-cutover` (after
+  readiness proven, before step 6), `post-cutover`, `post-deploy`
+  (runs on success *and* failure). Non-zero exit from a `pre-*` hook aborts;
+  `--skip-hooks` bypasses all. Hooks receive context via env:
+  `DOCKRAIL_PROJECT`, `DOCKRAIL_SERVICE(S)`, `DOCKRAIL_TAG`,
+  `DOCKRAIL_PERFORMER`, `DOCKRAIL_HOST`, `DOCKRAIL_COMMAND`,
+  `DOCKRAIL_OUTCOME` (post-deploy only). Until a notifier channel ships (D9),
+  a `post-deploy` hook is the supported way to wire Telegram/Slack.
 - **Drain** (step 7) — configurable `drain_timeout` per service before OLD is
   stopped. On the `nginx-upstream` path, `nginx -s reload` already lets
   in-flight requests finish on old workers; the timeout matters for
@@ -276,10 +316,12 @@ Invariant: **OLD keeps serving until NEW is proven ready.** A bare
 - **Status / logs** — `dockrail status` shows running tag + health per
   service; `dockrail logs <svc>` tails. Deploy emits structured
   step-by-step logs so a CI log reads cleanly (same rendering as `--dry-run`).
+- **Config inspection** — `dockrail config` prints the fully resolved config
+  (env substituted, defaults filled) — the debugging companion to `--dry-run`.
 
 ## 9. Security
 
-- SSH-agentless with a **dedicated `deploy` user** (not personal `youruser`),
+- SSH-agentless with a **dedicated `deploy` user** (not a personal login),
   locked-down key (`restrict`, `from=<runner-ip>` in `authorized_keys`), pinned
   host key (`known_hosts`), ed25519.
 - No secrets on command lines (section 8). No whole-home bind-mount (models mounted
@@ -299,19 +341,67 @@ Invariant: **OLD keeps serving until NEW is proven ready.** A bare
 ## 11. v1 build order
 
 1. Skeleton: cobra CLI, `deploy.yml` parse+validate, Connection (SSH+local),
-   preflight checks + `check` command (byproduct of config-parse work).
+   preflight checks + `check` command (byproduct of config-parse work);
+   `config` command falls out of the same work. Hooks runner (a small,
+   engine-independent unit) lands here too.
 2. Engine state machine with `recreate` cutover + `http` readiness +
    `placement: none` — deploy a *generic* service end-to-end. `--dry-run`
    lands here (the fake-Connection test harness pointed at stdout).
-3. Rollback + `status`/`logs` (incl. failed-attempt reporting).
+3. Rollback + `status`/`logs` (incl. failed-attempt reporting); deploy-history
+   state file + `audit` + `rollback [TAG]` + retention land here (the state
+   file format must be history-shaped from the first release — retrofitting
+   would mean migrating on-host state). `lock` subcommands + `--lock-wait`.
 4. `nginx-upstream` cutover strategy (zero-downtime for the routed service),
    two-slot compose override (D12).
 5. `gpu` placement (incl. `on_no_free_gpu`) + `vllm` readiness (warmup) — the
    differentiator.
 6. Secrets `env_file`.
-7. Dogfood on the dogfood project `generic-api-service`; then `gpu-llm-service`.
+7. Dogfood on the internal ML services (a routed API service first, then a
+   GPU/vLLM one).
 
-## 12. Open items for reviewer
+## 12. Planned new features (post-v1)
+
+From a 2026-07-06 review of Kamal 2.x's feature set. Items adopted into v1 are
+already folded into sections 2, 5, 8 and 11 above (hooks, deploy history +
+`audit`, `rollback [TAG]` + `retain_containers`, `--lock-wait` + `lock`
+subcommands, SSH jump-host config, `config` command, `x-` extension keys).
+This section holds what is planned but deferred, and what is consciously
+skipped.
+
+### Planned (v1.x / v2)
+
+- **Destinations (multi-env)** — `dockrail deploy -d staging` merges
+  `deploy.staging.yml` over the base `deploy.yml` (Kamal's overlay model).
+  Orthogonal to multi-host (each destination is still one host, so D3 holds).
+  The `-d` flag and the `deploy.<destination>.yml` naming convention are
+  **reserved now**; implementation after the dogfood project dogfooding.
+- **`exec`** — `dockrail exec <svc> [cmd]` (with `-i`): essentially
+  `docker compose exec` over SSH using the tool's config, removing the
+  "ssh in and find the project dir" chore. An `aliases:` config map
+  (short name → full command string) rides on top once `exec` exists.
+- **Maintenance mode** — `dockrail maintenance` / `live`: flip the proxy to a
+  static 503/maintenance page and back. A natural fit for planned model-swap
+  windows on single-GPU hosts; needs per-proxy-driver work, so it follows the
+  proxy interface, not v1.
+- **Secrets adapters** — extend `secrets:` beyond `from_env` with adapters
+  (1Password, Bitwarden, AWS/GCP Secret Manager, Doppler): values resolved on
+  the invoking machine at deploy time and shipped into the host `env_file`,
+  so D8 is unchanged. `from_env` remains the CI path.
+
+### Considered and skipped (with rationale)
+
+- **Accessories** (Kamal's separately-managed DB/redis containers) — compose
+  already models side services; a second lifecycle would fight D7 (compose
+  stays authoritative). Anything long-lived belongs in the compose file.
+- **Owning the proxy** (auto-TLS, host routing, error pages) — rejected per
+  D5; these belong to a shipped proxy, which v1 drives rather than owns.
+- **Image building / buildx** — rejected per D10; CI builds and pushes.
+- **Roles / tags / rolling `boot.limit`** — multi-host machinery, deferred
+  with D3.
+- **`asset_path`** (overlapping static-asset versions during cutover) — a
+  Rails asset-fingerprint concern with no equivalent in this tool's use cases.
+
+## 13. Open items for reviewer
 
 - **Real binary/repo name** (placeholder `dockrail`) and where it lives
   (its own repo vs. inside the workspace).

@@ -5,14 +5,14 @@
 ## Decisions (resolved)
 
 1. **VRAM headroom → safety factor ×1.2.** A GPU in `pool` is a free slot when `memory.free >= vram_min * 1.2`. The 20% reserves room for KV-cache growth so a second copy doesn't OOM under load. `vram_min` = base model footprint.
-2. **GPU→container binding → dockrail assigns `DOCKRAIL_GPU`.** dockrail picks the free GPU index and exports `DOCKRAIL_GPU=<idx>`; the compose file maps it (`deploy.resources.reservations.devices[].device_ids: ['${DOCKRAIL_GPU}']`). This is the compose convention the dogfood project repos must adopt for GPU services. Enables true blue-green on a free GPU.
+2. **GPU→container binding → dockrail assigns `DOCKRAIL_GPU`.** dockrail picks the free GPU index and exports `DOCKRAIL_GPU=<idx>`; the compose file maps it (`deploy.resources.reservations.devices[].device_ids: ['${DOCKRAIL_GPU}']`). This is the compose convention dogfood-project repos must adopt for GPU services. Enables true blue-green on a free GPU.
 3. **nginx flip → upstream rewrite with distinct blue/green services.** green and blue are separate compose services; dockrail rewrites the nginx `upstream` block to the ready container and `nginx -s reload`. Both containers are alive during the flip (zero gap) on the free-slot path; the `stop-old-first` path degrades to a sequenced flip with a gap. dockrail owns/templates the nginx upstream fragment.
 4. **warmup → no-op stub for v1.** `cutover.warmup` is parsed but does nothing in v1; "model served in `/v1/models`" (the vllm readiness probe) is treated as ready enough. Real warmup requests are a follow-up.
 5. **stop-old-first green failure → auto-rollback to blue.** Because dockrail stopped blue to free VRAM, on green readiness failure it automatically re-pulls and restarts blue's previous tag (reusing `Rollback` machinery) and records the failure in state. The `fail` branch (nothing changed) stays manual.
 
 ## Problem
 
-the dogfood project's ML services are vLLM model servers on a single shared GPU host (`gpu-host.example.com`). Two constraints collide:
+The ML services are vLLM model servers on a single shared GPU host (`gpu-host.example.com`). Two constraints collide:
 
 1. **Zero-downtime cutover.** the dogfood project already runs blue-green behind nginx (`mlops/` is the reverse proxy + autoheal). A `recreate` (stop-old-then-start-new) causes a downtime window plus a multi-minute model-reload gap — unacceptable for a live service.
 2. **One model copy fits in VRAM.** You cannot run blue and green vLLM containers for the same service simultaneously — there isn't GPU memory for two full model copies. So the naive blue-green ("start green alongside blue, then switch") is impossible for GPU services.
@@ -46,7 +46,7 @@ Before starting green, query the target's GPUs and decide if there's room for a 
 
 ### 2. Proxy cutover (`cutover.strategy: proxy`, `cutover.proxy: nginx-upstream`)
 
-The nginx flip. the dogfood project's `mlops` nginx fronts the services, so "flip" = point the upstream at the new container and reload nginx.
+The nginx flip. The existing `mlops` nginx fronts the services, so "flip" = point the upstream at the new container and reload nginx.
 
 **[DECIDE] Flip mechanism.** This is the biggest open question — how dockrail tells nginx to switch:
 

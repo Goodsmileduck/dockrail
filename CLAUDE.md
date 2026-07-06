@@ -13,9 +13,9 @@ serving tokens" readiness).
 Positioning: a **general compose deployer whose headline feature is LLM-aware
 cutover** — the thing no general deployer (Coolify, Dokploy, CapRover, Kamal,
 Portainer) does. Intended for general release to anyone running containers,
-especially self-hosted LLMs, on a single or home server. The `example-org`
-ML platform is the first dogfood user, but **keep the dogfood project specifics out of the tool**
-— they belong in a `deploy.yml`, not in the code.
+especially self-hosted LLMs, on a single or home server. An internal ML
+platform is the first dogfood user, but **keep dogfood-project specifics out
+of the tool** — they belong in a `deploy.yml`, not in the code.
 
 Status: **design phase.** No implementation yet. The authoritative design is
 [`docs/specs/2026-07-05-dockrail-design.md`](docs/specs/2026-07-05-dockrail-design.md)
@@ -59,7 +59,14 @@ Status: **design phase.** No implementation yet. The authoritative design is
 nginx · rollback · GPU placement + vLLM warmup readiness · secrets via env_file ·
 preflight + `check` command · `deploy --dry-run` (plan print) · failure
 forensics (failed NEW kept for inspection, log tail in output) ·
-`deploy` / `rollback` / `status` / `logs` / `check` commands.
+lifecycle hooks (`.dockrail/hooks`) · deploy history + `audit` ·
+`retain_containers` retention with `rollback [TAG]` · lock with `--lock-wait` ·
+`deploy` / `rollback` / `status` / `logs` / `check` / `config` / `audit` /
+`lock` commands.
+
+**Planned post-v1 (spec section 12):** destinations (`-d staging` overlay) ·
+`exec` + aliases · maintenance mode · secrets adapters. Consciously skipped:
+accessories, owning the proxy, image building, `asset_path`.
 
 **Deferred (v2+):** multi-host / roles / destinations · managed/Traefik/Caddy
 proxy drivers · notification channels (Telegram first) · more engines
@@ -93,9 +100,10 @@ proxy drivers · notification channels (Telegram first) · more engines
 5. `gpu` placement (incl. `on_no_free_gpu`) + `vllm` warmup readiness — the
    differentiator.
 6. Secrets `env_file`.
-7. Dogfood on the dogfood project `generic-api-service`, then `gpu-llm-service`.
+7. Dogfood on the internal ML services (routed API service first, then a
+   GPU/vLLM one).
 
-## Open items (see spec section 12)
+## Open items (see spec section 13)
 
 - Real binary/repo name (placeholder `dockrail`).
 - VRAM query: `nvidia-smi` parse vs NVML binding.
