@@ -51,7 +51,7 @@ authoritative design is
 | D9 | **Notifier is an interface**; engine emits events from day one, no channel ships in v1 (Telegram first in v2) |
 | D10 | Tool **deploys**, does not build |
 | D11 | Cutover = two strategies: `recreate` (blip) and `proxy` (zero-downtime, optional `warmup`); no `blue-green` |
-| D12 | Two-slot = generated compose override with second named service (`<svc>-next`); live slot in host state file |
+| D12 | Two-slot = generated compose override with second named service (`<svc>-next`); live slot derived from running containers |
 | D13 | GPU degrade = `placement.on_no_free_gpu: fail \| stop-old-first`, default `fail` |
 
 ## v1 scope

@@ -87,7 +87,7 @@ this tool only deploys).
 | D8 | Secrets = host `env_file` referenced by compose; injected from CI env | Locked |
 | D9 | `Notifier` is an **interface**; the engine emits events from day one, but no channel ships in v1. First channel = Telegram in v2 | Locked (revised 2026-07-05) |
 | D11 | Cutover = two strategies: `recreate` (blip) and `proxy` (zero-downtime, optional `warmup`); no standalone `blue-green` | Locked |
-| D12 | Two-slot mechanism = generated compose override defining a second named service (`<svc>-next`); live slot recorded in the host state file | Locked |
+| D12 | Two-slot mechanism = generated compose override defining a second named service (`<svc>-next`); live slot derived from running containers | Locked |
 | D13 | GPU degrade path = `placement.on_no_free_gpu: fail \| stop-old-first`, default `fail` | Locked |
 | D10 | This tool **does not build images**; CI builds+pushes, tool deploys a tag | Locked |
 
