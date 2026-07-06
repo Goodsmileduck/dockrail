@@ -60,3 +60,21 @@ func TestLoadInvalid(t *testing.T) {
 		})
 	}
 }
+
+func TestRetainContainersDefaultsTo5(t *testing.T) {
+	cfg, err := Load(write(t, validYAML))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.RetainContainers != 5 {
+		t.Fatalf("default = %d, want 5", cfg.RetainContainers)
+	}
+}
+
+func TestRetainContainersRejectsNegative(t *testing.T) {
+	yaml := validYAML + "retain_containers: -1\n"
+	_, err := Load(write(t, yaml))
+	if err == nil || !strings.Contains(err.Error(), "retain_containers") {
+		t.Fatalf("want retain_containers error, got %v", err)
+	}
+}

@@ -142,9 +142,8 @@ func retainedTags(h []Record, n int) []string {
 }
 
 // retainWindow reports how many distinct recent tags are eligible for
-// explicit rollback. The config field (RetainContainers) lands in a later
-// task; until then this is a fixed default.
-func retainWindow(*config.Config) int { return 5 }
+// explicit rollback and retention.
+func retainWindow(cfg *config.Config) int { return cfg.RetainContainers }
 
 // imagePresent checks every service's image at the given tag exists on the
 // host, resolving repo names through compose itself.
@@ -210,6 +209,7 @@ func (e *Engine) recreate(ctx context.Context, name string, svc config.Service, 
 	}
 
 	e.logf("step recreate: stop old + start new")
+	e.captureLogs(ctx, name, name)
 	if _, err := e.Conn.Run(ctx, fmt.Sprintf("%s stop %s", compose, name)); err != nil {
 		return fmt.Errorf("stop old: %w", err)
 	}
@@ -245,6 +245,11 @@ func (e *Engine) finalize(ctx context.Context, tag, outcome string, ids map[stri
 	}
 	if _, err := e.Conn.Run(ctx, "docker image prune -f"); err != nil {
 		e.logf("warn: prune failed: %v", err)
+	}
+	if h, err := loadHistory(ctx, e.Conn, e.Cfg.Project); err == nil {
+		e.prune(ctx, h)
+	} else {
+		e.logf("warn: prune skipped: %v", err)
 	}
 	return nil
 }

@@ -16,8 +16,9 @@ import (
 func engineFixture() (*Engine, *connection.Fake) {
 	f := connection.NewFake()
 	cfg := &config.Config{
-		Project: "demo",
-		Compose: "docker-compose.yml",
+		Project:          "demo",
+		Compose:          "docker-compose.yml",
+		RetainContainers: 5,
 		Services: map[string]config.Service{
 			"web": {
 				ImageTag:  "v2",

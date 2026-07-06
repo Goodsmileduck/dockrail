@@ -27,7 +27,7 @@ func TestRunRollbackRestoresPreviousTag(t *testing.T) {
 {"ts":"2026-07-06T11:00:00Z","tag":"v2","performer":"ci","outcome":"deployed"}
 `, nil)
 	cfg := &config.Config{
-		Project: "demo", Compose: "docker-compose.yml",
+		Project: "demo", Compose: "docker-compose.yml", RetainContainers: 5,
 		Services: map[string]config.Service{"web": {
 			ImageTag:  "v2",
 			Readiness: config.Readiness{Type: "http", Path: "/health", Port: 8010, Timeout: "1s"},
@@ -51,7 +51,7 @@ func TestRunRollbackToExplicitTag(t *testing.T) {
 `, nil)
 	f.Stub("docker image inspect", "sha256:abc", nil)
 	cfg := &config.Config{
-		Project: "demo", Compose: "docker-compose.yml",
+		Project: "demo", Compose: "docker-compose.yml", RetainContainers: 5,
 		Services: map[string]config.Service{"web": {
 			ImageTag:  "v2",
 			Readiness: config.Readiness{Type: "http", Path: "/health", Port: 8010, Timeout: "1s"},

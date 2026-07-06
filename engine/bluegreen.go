@@ -100,6 +100,7 @@ func (e *Engine) proxyCutover(ctx context.Context, name string, svc config.Servi
 		if _, err := e.Conn.Run(ctx, e.composeCmd(prefix, tag, "", "stop", blueSvc)); err != nil {
 			return fmt.Errorf("stop blue: %w", err)
 		}
+		e.captureLogs(ctx, name, greenSvc)
 		if _, err := e.Conn.Run(ctx, e.composeCmd(prefix, tag, gpu, "up -d --no-deps", greenSvc)); err != nil {
 			return fmt.Errorf("start green: %w", err)
 		}
@@ -117,6 +118,7 @@ func (e *Engine) proxyCutover(ctx context.Context, name string, svc config.Servi
 
 	// Zero-gap: green up alongside blue, gate, flip, then stop blue.
 	e.logf("step blue-green: starting %s alongside %s", greenSvc, blueSvc)
+	e.captureLogs(ctx, name, greenSvc)
 	if _, err := e.Conn.Run(ctx, e.composeCmd(prefix, tag, gpu, "up -d --no-deps", greenSvc)); err != nil {
 		return fmt.Errorf("start green: %w", err)
 	}
