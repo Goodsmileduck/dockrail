@@ -20,17 +20,16 @@ type StatusReport struct {
 	Services    []ServiceStatus `json:"services"`
 }
 
-// Status reports the deployed tag pair from host state plus the live running
-// image tag per service. It is read-only.
+// Status reports the deployed tag pair derived from deploy history plus the
+// live running image tag per service. It is read-only.
 func (e *Engine) Status(ctx context.Context) (StatusReport, error) {
-	st, err := loadState(ctx, e.Conn, e.Cfg.Project)
+	h, err := loadHistory(ctx, e.Conn, e.Cfg.Project)
 	if err != nil {
 		return StatusReport{}, err
 	}
-	rep := StatusReport{
-		CurrentTag:  st.CurrentTag,
-		PreviousTag: st.PreviousTag,
-		LastFailure: st.LastFailure,
+	rep := StatusReport{LastFailure: lastFailure(h), PreviousTag: previousTag(h)}
+	if cur, ok := currentRecord(h); ok {
+		rep.CurrentTag = cur.Tag
 	}
 	names := make([]string, 0, len(e.Cfg.Services))
 	for name := range e.Cfg.Services {

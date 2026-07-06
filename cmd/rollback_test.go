@@ -23,7 +23,9 @@ func TestRollbackCommandRegistered(t *testing.T) {
 
 func TestRunRollbackRestoresPreviousTag(t *testing.T) {
 	f := connection.NewFake()
-	f.Stub("state.json", `{"previous_tag":"v1","current_tag":"v2"}`, nil)
+	f.Stub("history.jsonl", `{"ts":"2026-07-06T10:00:00Z","tag":"v1","performer":"ci","outcome":"deployed"}
+{"ts":"2026-07-06T11:00:00Z","tag":"v2","performer":"ci","outcome":"deployed"}
+`, nil)
 	cfg := &config.Config{
 		Project: "demo", Compose: "docker-compose.yml",
 		Services: map[string]config.Service{"web": {

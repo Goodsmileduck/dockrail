@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"strings"
 
 	"github.com/goodsmileduck/dockrail/config"
 	"github.com/goodsmileduck/dockrail/connection"
@@ -19,7 +20,7 @@ type Engine struct {
 
 // safeTag guards image tags before they are interpolated into a host shell
 // command. Valid image references only use this character set; anything else
-// (e.g. a corrupt or tampered state file feeding Rollback) is rejected.
+// (e.g. a corrupt or tampered history line feeding Rollback) is rejected.
 var safeTag = regexp.MustCompile(`^[A-Za-z0-9_.:/@-]+$`)
 
 func (e *Engine) logf(format string, a ...any) {
@@ -39,44 +40,38 @@ func (e *Engine) Deploy(ctx context.Context) error {
 		return fmt.Errorf("preflight failed: %v", errs)
 	}
 
-	// Read the rollback anchor once for the whole operation. The host state
-	// file holds a single project-level tag pair, so it must be written
-	// exactly once (in finalize) — writing per service would let a later
-	// service read and overwrite the anchor an earlier one just recorded.
-	e.logf("step record-anchor")
-	st, err := loadState(ctx, e.Conn, e.Cfg.Project)
-	if err != nil {
-		return err
-	}
-	anchor := st.CurrentTag
-
 	secrets, err := collectSecrets(e.Cfg.Secrets.FromEnv)
 	if err != nil {
-		return e.recordFailure(ctx, st, fmt.Sprintf("secrets: %v", err), err)
+		return e.recordFailure(ctx, "", "secrets", err)
 	}
 	prefix, err := writeSecretsFile(ctx, e.Conn, e.Cfg.Project, secrets)
 	if err != nil {
-		return e.recordFailure(ctx, st, fmt.Sprintf("secrets: %v", err), err)
+		return e.recordFailure(ctx, "", "secrets", err)
 	}
 	if err := registryLogin(ctx, e.Conn, e.Cfg.Registry, e.Out); err != nil {
-		return e.recordFailure(ctx, st, fmt.Sprintf("registry login: %v", err), err)
+		return e.recordFailure(ctx, "", "registry", err)
 	}
 
 	var deployed string
+	ids := map[string]string{}
 	for name, svc := range e.Cfg.Services {
 		if err := e.cutover(ctx, name, svc, svc.ImageTag, prefix); err != nil {
-			return e.recordFailure(ctx, st, fmt.Sprintf("deploy %s tag %s: %v", name, svc.ImageTag, err),
+			return e.recordFailure(ctx, svc.ImageTag, "deploy",
 				fmt.Errorf("service %s: %w", name, err))
 		}
 		deployed = svc.ImageTag
+		if cid, err := e.containerID(ctx, name); err == nil && cid != "" {
+			ids[name] = cid
+		}
 	}
-	return e.finalize(ctx, st, anchor, deployed)
+	return e.finalize(ctx, deployed, "deployed", ids)
 }
 
-// Rollback restores the previously running image tag recorded in host state,
-// re-running the recreate sequence for every service against that tag. It
-// takes the deploy lock for its duration. Because host state records a single
-// project-level tag pair, all services are restored to the same previous tag.
+// Rollback restores the previously running image tag recorded in deploy
+// history, re-running the cutover sequence for every service against that
+// tag. It takes the deploy lock for its duration. Because history records a
+// single project-level tag per attempt, all services are restored to the
+// same previous tag.
 func (e *Engine) Rollback(ctx context.Context) error {
 	e.logf("step lock")
 	release, err := acquireLock(ctx, e.Conn, e.Cfg.Project)
@@ -85,42 +80,50 @@ func (e *Engine) Rollback(ctx context.Context) error {
 	}
 	defer release()
 
-	st, err := loadState(ctx, e.Conn, e.Cfg.Project)
+	h, err := loadHistory(ctx, e.Conn, e.Cfg.Project)
 	if err != nil {
 		return err
 	}
-	if st.PreviousTag == "" {
-		return fmt.Errorf("no previous tag recorded for project %q; nothing to roll back to", e.Cfg.Project)
+	target := previousTag(h)
+	if target == "" {
+		return fmt.Errorf("no previous tag in history for project %q; nothing to roll back to", e.Cfg.Project)
 	}
-	target := st.PreviousTag
-	anchor := st.CurrentTag
-	e.logf("step rollback: restoring tag %s", target)
+	return e.deployTag(ctx, target, "rolled-back")
+}
+
+// deployTag runs secrets+registry+cutover for every service at an explicit
+// tag and appends one history record with the given success outcome. Shared
+// by Rollback and (Task 4) RollbackTo.
+func (e *Engine) deployTag(ctx context.Context, tag, outcome string) error {
+	e.logf("step rollback: restoring tag %s", tag)
 	secrets, err := collectSecrets(e.Cfg.Secrets.FromEnv)
 	if err != nil {
-		return e.recordFailure(ctx, st, fmt.Sprintf("secrets: %v", err), err)
+		return e.recordFailure(ctx, tag, "secrets", err)
 	}
 	prefix, err := writeSecretsFile(ctx, e.Conn, e.Cfg.Project, secrets)
 	if err != nil {
-		return e.recordFailure(ctx, st, fmt.Sprintf("secrets: %v", err), err)
+		return e.recordFailure(ctx, tag, "secrets", err)
 	}
 	if err := registryLogin(ctx, e.Conn, e.Cfg.Registry, e.Out); err != nil {
-		return e.recordFailure(ctx, st, fmt.Sprintf("registry login: %v", err), err)
+		return e.recordFailure(ctx, tag, "registry", err)
 	}
+	ids := map[string]string{}
 	for name, svc := range e.Cfg.Services {
-		if err := e.cutover(ctx, name, svc, target, prefix); err != nil {
-			return e.recordFailure(ctx, st, fmt.Sprintf("rollback %s tag %s: %v", name, target, err),
+		if err := e.cutover(ctx, name, svc, tag, prefix); err != nil {
+			return e.recordFailure(ctx, tag, "rollback",
 				fmt.Errorf("service %s: %w", name, err))
 		}
+		if cid, err := e.containerID(ctx, name); err == nil && cid != "" {
+			ids[name] = cid
+		}
 	}
-	// After a rollback the roles swap: what was current becomes the new
-	// previous, and the restored target becomes current.
-	return e.finalize(ctx, st, anchor, target)
+	return e.finalize(ctx, tag, outcome, ids)
 }
 
 // recreate runs the fixed pull→stop→up→probe sequence for one service at an
-// explicit image tag. It performs no host-state I/O; the caller owns the
-// anchor read and the single finalize write. Deploy uses the service's
-// configured tag; Rollback uses the recorded previous tag.
+// explicit image tag. It performs no history I/O; the caller owns the single
+// finalize/recordFailure write. Deploy uses the service's configured tag;
+// Rollback uses the recorded previous tag.
 func (e *Engine) recreate(ctx context.Context, name string, svc config.Service, tag string, prefix string) error {
 	if !safeTag.MatchString(tag) {
 		return fmt.Errorf("unsafe image tag %q", tag)
@@ -163,12 +166,11 @@ func (e *Engine) cutover(ctx context.Context, name string, svc config.Service, t
 	}
 }
 
-// finalize persists the swapped tag pair once and prunes dangling images. The
-// prune is best-effort and never fails the operation.
-func (e *Engine) finalize(ctx context.Context, st State, previous, current string) error {
+// finalize appends the success record and prunes dangling images. The prune
+// is best-effort and never fails the operation.
+func (e *Engine) finalize(ctx context.Context, tag, outcome string, ids map[string]string) error {
 	e.logf("step finalize")
-	st.PreviousTag, st.CurrentTag, st.LastFailure = previous, current, ""
-	if err := saveState(ctx, e.Conn, e.Cfg.Project, st); err != nil {
+	if err := appendRecord(ctx, e.Conn, e.Cfg.Project, Record{Tag: tag, Outcome: outcome, Services: ids}); err != nil {
 		return err
 	}
 	if _, err := e.Conn.Run(ctx, "docker image prune -f"); err != nil {
@@ -177,11 +179,25 @@ func (e *Engine) finalize(ctx context.Context, st State, previous, current strin
 	return nil
 }
 
-// recordFailure persists the failure note to host state (best-effort) and
-// returns the caller's error. State is not otherwise mutated, so the rollback
-// anchor is preserved for a later retry or rollback.
-func (e *Engine) recordFailure(ctx context.Context, st State, note string, retErr error) error {
-	st.LastFailure = note
-	_ = saveState(ctx, e.Conn, e.Cfg.Project, st)
+// recordFailure appends a failed@<step> record (best-effort) and returns the
+// caller's error. Nothing else is written, so the rollback anchor — the last
+// successful record — is untouched.
+func (e *Engine) recordFailure(ctx context.Context, tag, step string, retErr error) error {
+	_ = appendRecord(ctx, e.Conn, e.Cfg.Project, Record{Tag: tag, Outcome: "failed@" + step})
 	return retErr
+}
+
+// containerID reports the running container for a service, checking the
+// plain compose name first and then the blue/green slot names.
+func (e *Engine) containerID(ctx context.Context, name string) (string, error) {
+	for _, n := range []string{name, name + "-blue", name + "-green"} {
+		out, err := e.Conn.Run(ctx, fmt.Sprintf("docker compose -f %s ps -q %s", e.Cfg.Compose, n))
+		if err != nil {
+			return "", err
+		}
+		if s := strings.TrimSpace(out); s != "" {
+			return s, nil
+		}
+	}
+	return "", nil
 }

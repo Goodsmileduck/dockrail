@@ -14,7 +14,9 @@ import (
 
 func TestRunStatusPrintsReport(t *testing.T) {
 	f := connection.NewFake()
-	f.Stub("state.json", `{"previous_tag":"v1","current_tag":"v2"}`, nil)
+	f.Stub("history.jsonl", `{"ts":"2026-07-06T10:00:00Z","tag":"v1","performer":"ci","outcome":"deployed"}
+{"ts":"2026-07-06T11:00:00Z","tag":"v2","performer":"ci","outcome":"deployed"}
+`, nil)
 	f.Stub("ps -q web", "cid1\n", nil)
 	f.Stub("inspect", "v2\n", nil)
 	cfg := &config.Config{
@@ -39,7 +41,9 @@ func TestRunStatusPrintsReport(t *testing.T) {
 
 func TestRunStatusJSON(t *testing.T) {
 	f := connection.NewFake()
-	f.Stub("state.json", `{"previous_tag":"v1","current_tag":"v2"}`, nil)
+	f.Stub("history.jsonl", `{"ts":"2026-07-06T10:00:00Z","tag":"v1","performer":"ci","outcome":"deployed"}
+{"ts":"2026-07-06T11:00:00Z","tag":"v2","performer":"ci","outcome":"deployed"}
+`, nil)
 	f.Stub("ps -q web", "cid1\n", nil)
 	f.Stub("inspect", "v2\n", nil)
 	cfg := &config.Config{
