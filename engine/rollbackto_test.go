@@ -15,6 +15,7 @@ const rollbackHistory = `{"ts":"1","tag":"v1","performer":"ci","outcome":"deploy
 func TestRollbackToAcceptsRetainedTag(t *testing.T) {
 	e, f := engineFixture()
 	f.Stub("history.jsonl", rollbackHistory, nil)
+	f.Stub("config --images", "registry.example.com/api:v1\n", nil)
 	f.Stub("docker image inspect", "sha256:abc", nil)
 	if err := e.RollbackTo(context.Background(), "v1"); err != nil {
 		t.Fatal(err)
@@ -37,6 +38,7 @@ func TestRollbackToRejectsUnknownTag(t *testing.T) {
 func TestRollbackToRejectsPrunedImage(t *testing.T) {
 	e, f := engineFixture()
 	f.Stub("history.jsonl", rollbackHistory, nil)
+	f.Stub("config --images", "registry.example.com/api:v1\n", nil)
 	f.Stub("docker image inspect", "", fmt.Errorf("no such image"))
 	if err := e.RollbackTo(context.Background(), "v1"); err == nil {
 		t.Fatal("want error when image is gone from host")

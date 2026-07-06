@@ -146,11 +146,17 @@ func retainedTags(h []Record, n int) []string {
 // task; until then this is a fixed default.
 func retainWindow(*config.Config) int { return 5 }
 
-// imagePresent checks whether the image for the given tag is still present
-// on the host (retention pruning may have removed it).
+// imagePresent checks every service's image at the given tag exists on the
+// host, resolving repo names through compose itself.
 func (e *Engine) imagePresent(ctx context.Context, tag string) error {
-	if _, err := e.Conn.Run(ctx, fmt.Sprintf("docker image inspect --format '{{.Id}}' %s", tag)); err != nil {
-		return fmt.Errorf("image for tag %s not found: %w", tag, err)
+	out, err := e.Conn.Run(ctx, fmt.Sprintf("TAG=%s docker compose -f %s config --images", tag, e.Cfg.Compose))
+	if err != nil {
+		return err
+	}
+	for _, img := range strings.Fields(out) {
+		if _, err := e.Conn.Run(ctx, fmt.Sprintf("docker image inspect --format '{{.Id}}' %s", img)); err != nil {
+			return fmt.Errorf("image %s: %w", img, err)
+		}
 	}
 	return nil
 }
