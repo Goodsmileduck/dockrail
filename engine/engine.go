@@ -91,6 +91,70 @@ func (e *Engine) Rollback(ctx context.Context) error {
 	return e.deployTag(ctx, target, "rolled-back")
 }
 
+// RollbackTo restores an explicit tag. The tag must appear as a successful
+// record within the last retainWindow distinct deployed tags, and its image
+// must still be present on the host (retention may have pruned it).
+func (e *Engine) RollbackTo(ctx context.Context, tag string) error {
+	if !safeTag.MatchString(tag) {
+		return fmt.Errorf("unsafe image tag %q", tag)
+	}
+	e.logf("step lock")
+	release, err := acquireLock(ctx, e.Conn, e.Cfg.Project)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	h, err := loadHistory(ctx, e.Conn, e.Cfg.Project)
+	if err != nil {
+		return err
+	}
+	window := retainedTags(h, retainWindow(e.Cfg))
+	found := false
+	for _, t := range window {
+		if t == tag {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("tag %q is not in the retained history window; candidates: %s",
+			tag, strings.Join(window, ", "))
+	}
+	if err := e.imagePresent(ctx, tag); err != nil {
+		return fmt.Errorf("tag %q is in history but its image is gone from the host (pruned?): %w", tag, err)
+	}
+	return e.deployTag(ctx, tag, "rolled-back")
+}
+
+// retainedTags returns the last n distinct successfully-deployed tags,
+// newest first.
+func retainedTags(h []Record, n int) []string {
+	var tags []string
+	seen := map[string]bool{}
+	for i := len(h) - 1; i >= 0 && len(tags) < n; i-- {
+		if h[i].success() && !seen[h[i].Tag] {
+			seen[h[i].Tag] = true
+			tags = append(tags, h[i].Tag)
+		}
+	}
+	return tags
+}
+
+// retainWindow reports how many distinct recent tags are eligible for
+// explicit rollback. The config field (RetainContainers) lands in a later
+// task; until then this is a fixed default.
+func retainWindow(*config.Config) int { return 5 }
+
+// imagePresent checks whether the image for the given tag is still present
+// on the host (retention pruning may have removed it).
+func (e *Engine) imagePresent(ctx context.Context, tag string) error {
+	if _, err := e.Conn.Run(ctx, fmt.Sprintf("docker image inspect --format '{{.Id}}' %s", tag)); err != nil {
+		return fmt.Errorf("image for tag %s not found: %w", tag, err)
+	}
+	return nil
+}
+
 // deployTag runs secrets+registry+cutover for every service at an explicit
 // tag and appends one history record with the given success outcome. Shared
 // by Rollback and (Task 4) RollbackTo.
