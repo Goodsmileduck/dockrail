@@ -40,6 +40,9 @@ func (e *Engine) Deploy(ctx context.Context) error {
 		return fmt.Errorf("preflight failed: %v", errs)
 	}
 
+	// Deploy depends on readable history: it is threaded into finalize for
+	// retention, so an unreadable/corrupt history fails fast here (as it
+	// already does in Rollback/RollbackTo) rather than silently skipping prune.
 	h, err := loadHistory(ctx, e.Conn, e.Cfg.Project)
 	if err != nil {
 		return err
@@ -253,6 +256,10 @@ func (e *Engine) cutover(ctx context.Context, name string, svc config.Service, t
 // of the history file from the host.
 func (e *Engine) finalize(ctx context.Context, tag, outcome string, ids map[string]string, h []Record) error {
 	e.logf("step finalize")
+	// TS/Performer are left blank here and filled by appendRecord on the host
+	// copy only; retention (retainedTags/success) reads Tag and Outcome only,
+	// so the in-memory rec below is sufficient. Any future time-based retention
+	// must not trust TS on this local copy.
 	rec := Record{Tag: tag, Outcome: outcome, Services: ids}
 	if err := appendRecord(ctx, e.Conn, e.Cfg.Project, rec); err != nil {
 		return err
@@ -272,26 +279,36 @@ func (e *Engine) recordFailure(ctx context.Context, tag, step string, retErr err
 	return retErr
 }
 
+// composePS returns the trimmed container id of a compose service (empty if it
+// is not up). The single place the `docker compose ps -q <svc>` invocation is
+// built, so slotID, runningImage, and activeColor stay in sync.
+func (e *Engine) composePS(ctx context.Context, composeName string) (string, error) {
+	out, err := e.Conn.Run(ctx, fmt.Sprintf("docker compose -f %s ps -q %s", e.Cfg.Compose, composeName))
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
 // slotID returns the running container id for a compose service, or "" if it
 // is not up or cannot be resolved. Best-effort: used only to record ids in
 // history, so errors are swallowed rather than failing the deploy.
 func (e *Engine) slotID(ctx context.Context, composeName string) string {
-	out, err := e.Conn.Run(ctx, fmt.Sprintf("docker compose -f %s ps -q %s", e.Cfg.Compose, composeName))
+	cid, err := e.composePS(ctx, composeName)
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(out)
+	return cid
 }
 
 // runningImage resolves the running container id and its image reference for a
 // compose service. A blank id (no error) means the service is not up. Used by
 // status reporting and by log capture before a slot is recreated.
 func (e *Engine) runningImage(ctx context.Context, composeName string) (cid, image string, err error) {
-	out, err := e.Conn.Run(ctx, fmt.Sprintf("docker compose -f %s ps -q %s", e.Cfg.Compose, composeName))
+	cid, err = e.composePS(ctx, composeName)
 	if err != nil {
 		return "", "", err
 	}
-	cid = strings.TrimSpace(out)
 	if cid == "" {
 		return "", "", nil
 	}

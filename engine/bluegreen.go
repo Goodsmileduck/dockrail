@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/goodsmileduck/dockrail/config"
 	"github.com/goodsmileduck/dockrail/strategy/placement"
@@ -22,12 +21,11 @@ func otherColor(c string) string {
 // neither blue nor green is up (first deploy).
 func (e *Engine) activeColor(ctx context.Context, service string) (string, error) {
 	for _, c := range []string{"blue", "green"} {
-		out, err := e.Conn.Run(ctx, fmt.Sprintf("docker compose -f %s ps -q %s-%s",
-			e.Cfg.Compose, service, c))
+		cid, err := e.composePS(ctx, service+"-"+c)
 		if err != nil {
 			return "", err
 		}
-		if strings.TrimSpace(out) != "" {
+		if cid != "" {
 			return c, nil
 		}
 	}
