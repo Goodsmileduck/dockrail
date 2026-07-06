@@ -17,9 +17,10 @@ especially self-hosted LLMs, on a single or home server. An internal ML
 platform is the first dogfood user, but **keep dogfood-project specifics out
 of the tool** — they belong in a `deploy.yml`, not in the code.
 
-Status: **design phase.** No implementation yet. The authoritative design is
+Status: **core implemented, v1 gaps remain** (see "v1 progress" below). The
+authoritative design is
 [`docs/specs/2026-07-05-dockrail-design.md`](docs/specs/2026-07-05-dockrail-design.md)
-— read it before writing any code.
+— read it before changing behavior.
 
 ## Core concepts (read the spec for detail)
 
@@ -88,22 +89,30 @@ proxy drivers · notification channels (Telegram first) · more engines
 - Keep the tool generic. Anything that only makes sense for the dogfood project is a config
   concern or a bug.
 
-## Build order (v1)
+## v1 progress
 
-1. Skeleton: cobra CLI, `deploy.yml` parse+validate, Connection (SSH + local),
-   preflight + `check`.
-2. Engine state machine with `recreate` cutover + `http` readiness +
-   `placement: none` — a generic service end-to-end; `--dry-run`.
-3. Rollback + `status` / `logs` (incl. failed-attempt reporting).
-4. `nginx-upstream` cutover + two-slot compose override (zero-downtime for a
-   routed service).
-5. `gpu` placement (incl. `on_no_free_gpu`) + `vllm` warmup readiness — the
-   differentiator.
-6. Secrets `env_file`.
-7. Dogfood on the internal ML services (routed API service first, then a
+**Done** (build-order steps 1–6): cobra CLI (`deploy --dry-run` / `rollback` /
+`status` / `logs` / `check`) · `deploy.yml` parse+validate (`config/`) ·
+Connection SSH + local with fakes (`connection/`) · engine state machine with
+preflight, host state, registry auth, secrets `env_file` (`engine/`) ·
+`recreate` and `proxy` cutover with nginx-upstream flip, two-slot blue-green
+and auto-rollback (`engine/bluegreen.go`, `engine/nginx.go` — note: cutover
+lives in `engine/`, not `strategy/cutover/`) · readiness `http` / `tcp` /
+`vllm` (`strategy/readiness/`) · `gpu` placement with nvidia-smi VRAM probe
+(`strategy/placement/`).
+
+**Remaining for v1:**
+
+1. `config`, `audit`, `lock` commands.
+2. Deploy history backing `audit`.
+3. `retain_containers` retention + `rollback [TAG]`.
+4. Lifecycle hooks (`.dockrail/hooks`).
+5. Deploy lock with `--lock-wait`.
+6. Dogfood on the internal ML services (routed API service first, then a
    GPU/vLLM one).
 
 ## Open items (see spec section 13)
 
 - Real binary/repo name (placeholder `dockrail`).
-- VRAM query: `nvidia-smi` parse vs NVML binding.
+- VRAM query: currently `nvidia-smi` parse (`strategy/placement/vram.go`);
+  NVML binding still an option.
