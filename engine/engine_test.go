@@ -39,13 +39,13 @@ func TestDeployHappyPathCommandOrder(t *testing.T) {
 	all := strings.Join(f.Commands, "\n")
 	// ordered milestones of the recreate sequence:
 	milestones := []string{
-		"docker version",      // preflight
-		"pull",                // recreate: pull NEW
-		"stop web",            // recreate: stop OLD
-		"up -d --no-deps web", // start NEW
-		"curl",                // probe
-		"history.jsonl",       // finalize: append record
-		"image prune",         // finalize: prune
+		"docker version",       // preflight
+		"pull",                 // recreate: pull NEW
+		"stop web",             // recreate: stop OLD
+		"up -d --no-deps web",  // start NEW
+		"curl",                 // probe
+		`"outcome":"deployed"`, // finalize: append record (Deploy also reads history.jsonl up front, so match the append payload, not the filename)
+		"image prune",          // finalize: prune
 	}
 	last := -1
 	for _, m := range milestones {

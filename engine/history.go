@@ -90,14 +90,20 @@ func currentRecord(h []Record) (Record, bool) {
 }
 
 // previousTag returns the tag of the latest successful record whose tag
-// differs from the current anchor's, or "" if there is none.
+// differs from the current anchor's, or "" if there is none. One backward
+// pass: the first success fixes the anchor tag, the next differing-tag success
+// is the answer.
 func previousTag(h []Record) string {
-	cur, ok := currentRecord(h)
-	if !ok {
-		return ""
-	}
+	curTag, foundCur := "", false
 	for i := len(h) - 1; i >= 0; i-- {
-		if h[i].success() && h[i].Tag != cur.Tag {
+		if !h[i].success() {
+			continue
+		}
+		if !foundCur {
+			curTag, foundCur = h[i].Tag, true
+			continue
+		}
+		if h[i].Tag != curTag {
 			return h[i].Tag
 		}
 	}

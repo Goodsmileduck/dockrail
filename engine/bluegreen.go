@@ -45,18 +45,19 @@ func (e *Engine) composeCmd(prefix, tag, gpu, action, svcColor string) string {
 // proxyCutover performs a blue-green cutover for one service. With a free GPU
 // slot it is zero-gap (green up alongside blue, flip, stop blue); otherwise it
 // follows on_no_free_gpu (fail = abort; stop-old-first = stop blue, start
-// green, flip, with auto-rollback to blue on readiness failure).
-func (e *Engine) proxyCutover(ctx context.Context, name string, svc config.Service, tag string, prefix string) error {
+// green, flip, with auto-rollback to blue on readiness failure). On success it
+// returns the id of the now-live green container.
+func (e *Engine) proxyCutover(ctx context.Context, name string, svc config.Service, tag string, prefix string) (string, error) {
 	if !safeTag.MatchString(tag) {
-		return fmt.Errorf("unsafe image tag %q", tag)
+		return "", fmt.Errorf("unsafe image tag %q", tag)
 	}
 	prober, err := readiness.New(svc.Readiness, svc.Model)
 	if err != nil {
-		return err
+		return "", err
 	}
 	active, err := e.activeColor(ctx, name)
 	if err != nil {
-		return err
+		return "", err
 	}
 	target := "blue"
 	if active != "" {
@@ -73,7 +74,7 @@ func (e *Engine) proxyCutover(ctx context.Context, name string, svc config.Servi
 	if svc.Placement.Type == "gpu" {
 		placer, err := placement.New(svc.Placement)
 		if err != nil {
-			return err
+			return "", err
 		}
 		idx, perr := placer.Pick(ctx, e.Conn)
 		switch {
@@ -81,28 +82,28 @@ func (e *Engine) proxyCutover(ctx context.Context, name string, svc config.Servi
 			gpu = idx // free slot -> zero-gap
 		case errors.Is(perr, placement.ErrNoFreeGPU):
 			if svc.Placement.OnNoFreeGPU == "fail" {
-				return fmt.Errorf("%s: no free GPU and on_no_free_gpu=fail", name)
+				return "", fmt.Errorf("%s: no free GPU and on_no_free_gpu=fail", name)
 			}
 			sequenced = true // stop-old-first
 		default:
-			return perr
+			return "", perr
 		}
 	}
 
 	e.logf("step pull: %s tag %s (%s)", name, tag, target)
 	if _, err := e.Conn.Run(ctx, e.composeCmd(prefix, tag, gpu, "pull", greenSvc)); err != nil {
-		return fmt.Errorf("pull green: %w", err)
+		return "", fmt.Errorf("pull green: %w", err)
 	}
 
 	if sequenced {
 		// Free VRAM first: stop blue, then bring up green.
 		e.logf("step stop-old-first: freeing VRAM by stopping %s", blueSvc)
 		if _, err := e.Conn.Run(ctx, e.composeCmd(prefix, tag, "", "stop", blueSvc)); err != nil {
-			return fmt.Errorf("stop blue: %w", err)
+			return "", fmt.Errorf("stop blue: %w", err)
 		}
 		e.captureLogs(ctx, name, greenSvc)
 		if _, err := e.Conn.Run(ctx, e.composeCmd(prefix, tag, gpu, "up -d --no-deps", greenSvc)); err != nil {
-			return fmt.Errorf("start green: %w", err)
+			return "", fmt.Errorf("start green: %w", err)
 		}
 		if err := prober.Probe(ctx, e.Conn); err != nil {
 			// Auto-rollback: green never became ready and blue is down. Use
@@ -111,28 +112,31 @@ func (e *Engine) proxyCutover(ctx context.Context, name string, svc config.Servi
 			// image that just failed), which is not a rollback at all.
 			e.logf("green failed readiness; auto-rolling back to %s", blueSvc)
 			_, _ = e.Conn.Run(ctx, fmt.Sprintf("docker compose -f %s start %s", e.Cfg.Compose, blueSvc))
-			return fmt.Errorf("green readiness failed, rolled back to blue: %w", err)
+			return "", fmt.Errorf("green readiness failed, rolled back to blue: %w", err)
 		}
-		return flipUpstream(ctx, e.Conn, e.Cfg.Project, svc.Cutover.Proxy, name, target, svc.Readiness.Port)
+		if err := flipUpstream(ctx, e.Conn, e.Cfg.Project, svc.Cutover.Proxy, name, target, svc.Readiness.Port); err != nil {
+			return "", err
+		}
+		return e.slotID(ctx, greenSvc), nil
 	}
 
 	// Zero-gap: green up alongside blue, gate, flip, then stop blue.
 	e.logf("step blue-green: starting %s alongside %s", greenSvc, blueSvc)
 	e.captureLogs(ctx, name, greenSvc)
 	if _, err := e.Conn.Run(ctx, e.composeCmd(prefix, tag, gpu, "up -d --no-deps", greenSvc)); err != nil {
-		return fmt.Errorf("start green: %w", err)
+		return "", fmt.Errorf("start green: %w", err)
 	}
 	if err := prober.Probe(ctx, e.Conn); err != nil {
 		// Green failed but blue still serves; tear down green, leave blue.
 		_, _ = e.Conn.Run(ctx, e.composeCmd(prefix, tag, "", "stop", greenSvc))
-		return fmt.Errorf("green readiness failed (blue still serving): %w", err)
+		return "", fmt.Errorf("green readiness failed (blue still serving): %w", err)
 	}
 	if err := flipUpstream(ctx, e.Conn, e.Cfg.Project, svc.Cutover.Proxy, name, target, svc.Readiness.Port); err != nil {
-		return err
+		return "", err
 	}
 	e.logf("flip complete; stopping old %s", blueSvc)
 	if _, err := e.Conn.Run(ctx, e.composeCmd(prefix, tag, "", "stop", blueSvc)); err != nil {
-		return fmt.Errorf("stop blue after flip: %w", err)
+		return "", fmt.Errorf("stop blue after flip: %w", err)
 	}
-	return nil
+	return e.slotID(ctx, greenSvc), nil
 }

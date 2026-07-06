@@ -40,31 +40,46 @@ func (e *Engine) Deploy(ctx context.Context) error {
 		return fmt.Errorf("preflight failed: %v", errs)
 	}
 
+	h, err := loadHistory(ctx, e.Conn, e.Cfg.Project)
+	if err != nil {
+		return err
+	}
+	return e.runServices(ctx, func(svc config.Service) string { return svc.ImageTag }, "", "deploy", "deployed", h)
+}
+
+// runServices is the shared deploy/rollback body: prepare secrets and registry
+// once, cut over every service to the tag tagFor picks, and finalize a single
+// success record. failTag is recorded on a secrets/registry failure (before any
+// service tag is known); step labels a cutover failure; outcome is the success
+// record's outcome. h is the pre-append history, threaded into finalize so it
+// need not re-read the file. The caller holds the deploy lock.
+func (e *Engine) runServices(ctx context.Context, tagFor func(config.Service) string, failTag, step, outcome string, h []Record) error {
 	secrets, err := collectSecrets(e.Cfg.Secrets.FromEnv)
 	if err != nil {
-		return e.recordFailure(ctx, "", "secrets", err)
+		return e.recordFailure(ctx, failTag, "secrets", err)
 	}
 	prefix, err := writeSecretsFile(ctx, e.Conn, e.Cfg.Project, secrets)
 	if err != nil {
-		return e.recordFailure(ctx, "", "secrets", err)
+		return e.recordFailure(ctx, failTag, "secrets", err)
 	}
 	if err := registryLogin(ctx, e.Conn, e.Cfg.Registry, e.Out); err != nil {
-		return e.recordFailure(ctx, "", "registry", err)
+		return e.recordFailure(ctx, failTag, "registry", err)
 	}
 
 	var deployed string
 	ids := map[string]string{}
 	for name, svc := range e.Cfg.Services {
-		if err := e.cutover(ctx, name, svc, svc.ImageTag, prefix); err != nil {
-			return e.recordFailure(ctx, svc.ImageTag, "deploy",
-				fmt.Errorf("service %s: %w", name, err))
+		tag := tagFor(svc)
+		cid, err := e.cutover(ctx, name, svc, tag, prefix)
+		if err != nil {
+			return e.recordFailure(ctx, tag, step, fmt.Errorf("service %s: %w", name, err))
 		}
-		deployed = svc.ImageTag
-		if cid, err := e.containerID(ctx, name); err == nil && cid != "" {
+		deployed = tag
+		if cid != "" {
 			ids[name] = cid
 		}
 	}
-	return e.finalize(ctx, deployed, "deployed", ids)
+	return e.finalize(ctx, deployed, outcome, ids, h)
 }
 
 // Rollback restores the previously running image tag recorded in deploy
@@ -88,7 +103,7 @@ func (e *Engine) Rollback(ctx context.Context) error {
 	if target == "" {
 		return fmt.Errorf("no previous tag in history for project %q; nothing to roll back to", e.Cfg.Project)
 	}
-	return e.deployTag(ctx, target, "rolled-back")
+	return e.deployTag(ctx, target, "rolled-back", h)
 }
 
 // RollbackTo restores an explicit tag. The tag must appear as a successful
@@ -124,7 +139,7 @@ func (e *Engine) RollbackTo(ctx context.Context, tag string) error {
 	if err := e.imagePresent(ctx, tag); err != nil {
 		return fmt.Errorf("tag %q is in history but its image is gone from the host (pruned?): %w", tag, err)
 	}
-	return e.deployTag(ctx, tag, "rolled-back")
+	return e.deployTag(ctx, tag, "rolled-back", h)
 }
 
 // retainedTags returns the last n distinct successfully-deployed tags,
@@ -175,97 +190,77 @@ func (e *Engine) imagePresent(ctx context.Context, tag string) error {
 	return nil
 }
 
-// deployTag runs secrets+registry+cutover for every service at an explicit
-// tag and appends one history record with the given success outcome. Shared
-// by Rollback and (Task 4) RollbackTo.
-func (e *Engine) deployTag(ctx context.Context, tag, outcome string) error {
+// deployTag restores every service to an explicit tag and appends one history
+// record with the given success outcome. Shared by Rollback and RollbackTo; h
+// is the pre-append history for retention.
+func (e *Engine) deployTag(ctx context.Context, tag, outcome string, h []Record) error {
 	e.logf("step rollback: restoring tag %s", tag)
-	secrets, err := collectSecrets(e.Cfg.Secrets.FromEnv)
-	if err != nil {
-		return e.recordFailure(ctx, tag, "secrets", err)
-	}
-	prefix, err := writeSecretsFile(ctx, e.Conn, e.Cfg.Project, secrets)
-	if err != nil {
-		return e.recordFailure(ctx, tag, "secrets", err)
-	}
-	if err := registryLogin(ctx, e.Conn, e.Cfg.Registry, e.Out); err != nil {
-		return e.recordFailure(ctx, tag, "registry", err)
-	}
-	ids := map[string]string{}
-	for name, svc := range e.Cfg.Services {
-		if err := e.cutover(ctx, name, svc, tag, prefix); err != nil {
-			return e.recordFailure(ctx, tag, "rollback",
-				fmt.Errorf("service %s: %w", name, err))
-		}
-		if cid, err := e.containerID(ctx, name); err == nil && cid != "" {
-			ids[name] = cid
-		}
-	}
-	return e.finalize(ctx, tag, outcome, ids)
+	return e.runServices(ctx, func(config.Service) string { return tag }, tag, "rollback", outcome, h)
 }
 
 // recreate runs the fixed pull→stop→up→probe sequence for one service at an
 // explicit image tag. It performs no history I/O; the caller owns the single
 // finalize/recordFailure write. Deploy uses the service's configured tag;
 // Rollback uses the recorded previous tag.
-func (e *Engine) recreate(ctx context.Context, name string, svc config.Service, tag string, prefix string) error {
+func (e *Engine) recreate(ctx context.Context, name string, svc config.Service, tag string, prefix string) (string, error) {
 	if !safeTag.MatchString(tag) {
-		return fmt.Errorf("unsafe image tag %q", tag)
+		return "", fmt.Errorf("unsafe image tag %q", tag)
 	}
 	prober, err := readiness.New(svc.Readiness, svc.Model)
 	if err != nil {
-		return err
+		return "", err
 	}
 	compose := fmt.Sprintf("%sTAG=%s docker compose -f %s", prefix, tag, e.Cfg.Compose)
 
 	e.logf("step pull: %s tag %s", name, tag)
 	if _, err := e.Conn.Run(ctx, fmt.Sprintf("%s pull %s", compose, name)); err != nil {
-		return fmt.Errorf("pull: %w", err)
+		return "", fmt.Errorf("pull: %w", err)
 	}
 
 	e.logf("step recreate: stop old + start new")
 	e.captureLogs(ctx, name, name)
 	if _, err := e.Conn.Run(ctx, fmt.Sprintf("%s stop %s", compose, name)); err != nil {
-		return fmt.Errorf("stop old: %w", err)
+		return "", fmt.Errorf("stop old: %w", err)
 	}
 	if _, err := e.Conn.Run(ctx, fmt.Sprintf("%s up -d --no-deps %s", compose, name)); err != nil {
-		return fmt.Errorf("start new: %w", err)
+		return "", fmt.Errorf("start new: %w", err)
 	}
 
 	e.logf("step readiness")
 	if err := prober.Probe(ctx, e.Conn); err != nil {
-		return err
+		return "", err
 	}
 	e.logf("deployed %s tag %s", name, tag)
-	return nil
+	return e.slotID(ctx, name), nil
 }
 
-func (e *Engine) cutover(ctx context.Context, name string, svc config.Service, tag string, prefix string) error {
+// cutover deploys one service at the given tag via its configured strategy and
+// returns the id of the container it made live (best-effort; "" if unresolved).
+func (e *Engine) cutover(ctx context.Context, name string, svc config.Service, tag string, prefix string) (string, error) {
 	switch svc.Cutover.Strategy {
 	case "recreate":
 		return e.recreate(ctx, name, svc, tag, prefix)
 	case "proxy":
 		return e.proxyCutover(ctx, name, svc, tag, prefix)
 	default:
-		return fmt.Errorf("cutover strategy %q not implemented yet", svc.Cutover.Strategy)
+		return "", fmt.Errorf("cutover strategy %q not implemented yet", svc.Cutover.Strategy)
 	}
 }
 
 // finalize appends the success record and prunes dangling images. The prune
-// is best-effort and never fails the operation.
-func (e *Engine) finalize(ctx context.Context, tag, outcome string, ids map[string]string) error {
+// is best-effort and never fails the operation. h is the pre-append history;
+// retention runs against it plus the record just written, avoiding a re-read
+// of the history file from the host.
+func (e *Engine) finalize(ctx context.Context, tag, outcome string, ids map[string]string, h []Record) error {
 	e.logf("step finalize")
-	if err := appendRecord(ctx, e.Conn, e.Cfg.Project, Record{Tag: tag, Outcome: outcome, Services: ids}); err != nil {
+	rec := Record{Tag: tag, Outcome: outcome, Services: ids}
+	if err := appendRecord(ctx, e.Conn, e.Cfg.Project, rec); err != nil {
 		return err
 	}
 	if _, err := e.Conn.Run(ctx, "docker image prune -f"); err != nil {
 		e.logf("warn: prune failed: %v", err)
 	}
-	if h, err := loadHistory(ctx, e.Conn, e.Cfg.Project); err == nil {
-		e.prune(ctx, h)
-	} else {
-		e.logf("warn: prune skipped: %v", err)
-	}
+	e.prune(ctx, append(h, rec))
 	return nil
 }
 
@@ -277,19 +272,15 @@ func (e *Engine) recordFailure(ctx context.Context, tag, step string, retErr err
 	return retErr
 }
 
-// containerID reports the running container for a service, checking the
-// plain compose name first and then the blue/green slot names.
-func (e *Engine) containerID(ctx context.Context, name string) (string, error) {
-	for _, n := range []string{name, name + "-blue", name + "-green"} {
-		out, err := e.Conn.Run(ctx, fmt.Sprintf("docker compose -f %s ps -q %s", e.Cfg.Compose, n))
-		if err != nil {
-			return "", err
-		}
-		if s := strings.TrimSpace(out); s != "" {
-			return s, nil
-		}
+// slotID returns the running container id for a compose service, or "" if it
+// is not up or cannot be resolved. Best-effort: used only to record ids in
+// history, so errors are swallowed rather than failing the deploy.
+func (e *Engine) slotID(ctx context.Context, composeName string) string {
+	out, err := e.Conn.Run(ctx, fmt.Sprintf("docker compose -f %s ps -q %s", e.Cfg.Compose, composeName))
+	if err != nil {
+		return ""
 	}
-	return "", nil
+	return strings.TrimSpace(out)
 }
 
 // runningImage resolves the running container id and its image reference for a
