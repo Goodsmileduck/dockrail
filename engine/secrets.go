@@ -29,8 +29,9 @@ func collectSecrets(names []string) (map[string]string, error) {
 
 // writeSecretsFile writes the collected secrets to a mode-600 env-file on the
 // target and returns a shell prefix that sources it. Secrets reach the target
-// only inside this heredoc write (like state.json), never as command argv on
-// later compose invocations. Returns "" and writes nothing for no secrets.
+// only inside this heredoc write (same pattern as the history.jsonl append),
+// never as command argv on later compose invocations. Returns "" and writes
+// nothing for no secrets.
 func writeSecretsFile(ctx context.Context, conn connection.Connection, project string, secrets map[string]string) (string, error) {
 	if len(secrets) == 0 {
 		return "", nil

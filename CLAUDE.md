@@ -99,16 +99,16 @@ preflight, host state, registry auth, secrets `env_file` (`engine/`) ·
 and auto-rollback (`engine/bluegreen.go`, `engine/nginx.go` — note: cutover
 lives in `engine/`, not `strategy/cutover/`) · readiness `http` / `tcp` /
 `vllm` (`strategy/readiness/`) · `gpu` placement with nvidia-smi VRAM probe
-(`strategy/placement/`).
+(`strategy/placement/`) · deploy history + `audit` + `rollback [TAG]` +
+`retain_containers` retention with log-tail capture (`engine/history.go`,
+`engine/audit.go`, `engine/retention.go`, `cmd/audit.go`).
 
 **Remaining for v1:**
 
-1. `config`, `audit`, `lock` commands.
-2. Deploy history backing `audit`.
-3. `retain_containers` retention + `rollback [TAG]`.
-4. Lifecycle hooks (`.dockrail/hooks`).
-5. Deploy lock with `--lock-wait`.
-6. Dogfood on the internal ML services (routed API service first, then a
+1. `config` and `lock` commands.
+2. Deploy lock with `--lock-wait`.
+3. Lifecycle hooks (`.dockrail/hooks`).
+4. Dogfood on the internal ML services (routed API service first, then a
    GPU/vLLM one).
 
 ## Open items (see spec section 13)
