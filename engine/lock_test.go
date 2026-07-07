@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/goodsmileduck/dockrail/connection"
 )
@@ -80,5 +82,80 @@ func TestAcquireLockCollisionWithoutMetadata(t *testing.T) {
 	_, err := acquireLock(context.Background(), f, "demo", "v42")
 	if err == nil || !strings.Contains(err.Error(), "no holder metadata") {
 		t.Fatalf("want 'no holder metadata' in error, got %v", err)
+	}
+}
+
+// flakyLockConn fails the lock mkdir a fixed number of times, then delegates
+// to the embedded Fake. Simulates a lock freeing up mid-wait.
+type flakyLockConn struct {
+	*connection.Fake
+	failures int
+}
+
+func (c *flakyLockConn) Run(ctx context.Context, cmd string) (string, error) {
+	if strings.Contains(cmd, "mkdir $HOME/.dockrail/demo/lock") && c.failures > 0 {
+		c.failures--
+		return "", errors.New("File exists")
+	}
+	return c.Fake.Run(ctx, cmd)
+}
+
+func fastPoll(t *testing.T) {
+	t.Helper()
+	old := lockPollInterval
+	lockPollInterval = time.Millisecond
+	t.Cleanup(func() { lockPollInterval = old })
+}
+
+func TestLockWaitAcquiresWhenLockFrees(t *testing.T) {
+	fastPoll(t)
+	c := &flakyLockConn{Fake: connection.NewFake(), failures: 2}
+	var buf bytes.Buffer
+	release, err := acquireLockWait(context.Background(), c, "demo", "v42", time.Second, &buf)
+	if err != nil {
+		t.Fatalf("lock freed during wait; want success, got %v", err)
+	}
+	release()
+	if !strings.Contains(buf.String(), "waiting for deploy lock") {
+		t.Errorf("first collision must print a waiting line, got %q", buf.String())
+	}
+}
+
+func TestLockWaitTimesOutWithHolderError(t *testing.T) {
+	fastPoll(t)
+	f := connection.NewFake()
+	f.Stub("mkdir $HOME/.dockrail/demo/lock", "", errors.New("File exists"))
+	f.Stub("cat $HOME/.dockrail/demo/lock/info.json",
+		`{"acquired_at":"2026-07-07T10:00:00Z","tag":"v41","by":"ci@runner"}`, nil)
+	var buf bytes.Buffer
+	_, err := acquireLockWait(context.Background(), f, "demo", "v42", 5*time.Millisecond, &buf)
+	if err == nil || !strings.Contains(err.Error(), "held by ci@runner") {
+		t.Fatalf("want holder error on timeout, got %v", err)
+	}
+}
+
+func TestLockWaitZeroFailsFast(t *testing.T) {
+	f := connection.NewFake()
+	f.Stub("mkdir $HOME/.dockrail/demo/lock", "", errors.New("File exists"))
+	var buf bytes.Buffer
+	_, err := acquireLockWait(context.Background(), f, "demo", "v42", 0, &buf)
+	if err == nil {
+		t.Fatal("wait=0 must fail immediately")
+	}
+	if strings.Contains(buf.String(), "waiting") {
+		t.Error("wait=0 must not print a waiting line")
+	}
+}
+
+func TestLockWaitRespectsContextCancel(t *testing.T) {
+	fastPoll(t)
+	f := connection.NewFake()
+	f.Stub("mkdir $HOME/.dockrail/demo/lock", "", errors.New("File exists"))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var buf bytes.Buffer
+	_, err := acquireLockWait(ctx, f, "demo", "v42", time.Minute, &buf)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("want context.Canceled, got %v", err)
 	}
 }

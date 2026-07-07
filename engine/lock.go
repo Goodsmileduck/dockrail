@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"time"
@@ -88,4 +89,35 @@ func lockTag(cfg *config.Config) string {
 	}
 	sort.Strings(tags)
 	return strings.Join(tags, ",")
+}
+
+// lockPollInterval is how often acquireLockWait retries. Package var so wait
+// tests can run in milliseconds.
+var lockPollInterval = 5 * time.Second
+
+// acquireLockWait acquires the deploy lock, retrying for up to wait when it
+// is held. wait <= 0 fails fast (acquireLock's behavior). The first collision
+// prints one waiting line to out; retries are silent. On timeout the last
+// holder-aware collision error is returned. Ctx cancellation aborts the wait.
+func acquireLockWait(ctx context.Context, conn connection.Connection, project, tag string, wait time.Duration, out io.Writer) (func(), error) {
+	release, err := acquireLock(ctx, conn, project, tag)
+	if err == nil || wait <= 0 {
+		return release, err
+	}
+	fmt.Fprintf(out, "waiting for deploy lock (%s)\n", lockHolderDesc(ctx, conn, project))
+	deadline := time.Now().Add(wait)
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(lockPollInterval):
+		}
+		release, err = acquireLock(ctx, conn, project, tag)
+		if err == nil {
+			return release, nil
+		}
+		if time.Now().After(deadline) {
+			return nil, err
+		}
+	}
 }
