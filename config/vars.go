@@ -63,35 +63,27 @@ func interpolate(raw []byte) ([]byte, error) {
 	return []byte(out), nil
 }
 
-// varsBlockRe finds the top-level "vars:" key and everything indented under
-// it, stopping at the next top-level key (a line starting at column 0 with
-// non-blank, non-comment content) or end of input. Blank lines and full-line
-// comments (whether indented or at column 0) inside the block are tolerated
-// and do not terminate the match early. Returns nil if there is no top-level
-// vars: key declared as a block mapping.
-var varsBlockRe = regexp.MustCompile(`(?m)^vars:[ \t]*\n((?:[ \t]+.*\n?|[ \t]*#.*\n?|[ \t]*\n)*)`)
-
-// flowStyleVarsRe detects a top-level "vars:" key followed by content on the
-// same line (e.g. "vars: { tag: v42 }" or "vars: [1, 2]") rather than a
-// newline. A trailing same-line comment (e.g. "vars: # comment") is not
-// flow-style — the mapping still follows as indented lines below.
-var flowStyleVarsRe = regexp.MustCompile(`(?m)^vars:[ \t]+[^ \t\n#].*$`)
+// varsBlockRe finds the top-level "vars:" key. Group 1 captures whatever
+// follows on the same line (empty or a comment for a block mapping, content
+// for a flow-style declaration); group 2 captures the block body — every
+// following line that is indented, blank, or a full-line comment (indented or
+// at column 0), stopping at the next top-level key or end of input.
+var varsBlockRe = regexp.MustCompile(`(?m)^vars:([^\n]*)(?:\n((?:[ \t]+.*\n?|[ \t]*#.*\n?|[ \t]*\n)*))?`)
 
 // extractVarsBlock accepts only a top-level "vars:" key declared as a block
-// mapping — "vars:" alone on its line, followed by "name: value" entries
-// indented beneath it (blank lines and full-line comments, indented or at
-// column 0, are allowed within the block). It returns that fragment as a
-// standalone, independently-parseable "vars:\n<indented lines>" YAML
-// document, or nil if raw has no top-level vars: key. A flow-style
+// mapping — "vars:" alone on its line (a trailing same-line comment is fine),
+// followed by "name: value" entries indented beneath it. It returns that
+// fragment as a standalone, independently-parseable "vars:\n<indented lines>"
+// YAML document, or nil if raw has no top-level vars: key. A flow-style
 // declaration on the same line (e.g. "vars: { tag: v42 }") is rejected with
 // an explicit error rather than silently yielding an empty vars block.
 func extractVarsBlock(raw []byte) ([]byte, error) {
-	if flowStyleVarsRe.Match(raw) {
-		return nil, fmt.Errorf(`vars: must be a block mapping (one "name: value" per indented line)`)
-	}
 	m := varsBlockRe.FindSubmatch(raw)
 	if m == nil {
 		return nil, nil
 	}
-	return append([]byte("vars:\n"), m[1]...), nil
+	if rest := strings.TrimLeft(string(m[1]), " \t"); rest != "" && !strings.HasPrefix(rest, "#") {
+		return nil, fmt.Errorf(`vars: must be a block mapping (one "name: value" per indented line)`)
+	}
+	return append([]byte("vars:\n"), m[2]...), nil
 }

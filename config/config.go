@@ -15,8 +15,12 @@ import (
 var projectRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 type Config struct {
-	Project  string             `yaml:"project"`
-	Compose  string             `yaml:"compose"`
+	Project string `yaml:"project"`
+	Compose string `yaml:"compose"`
+	// Vars exists so the strict KnownFields decode accepts the vars: block;
+	// interpolation happens on raw text in Load (see vars.go) before the
+	// decode, so this field is parse-time residue — do not wire behavior
+	// off it.
 	Vars     map[string]string  `yaml:"vars"`
 	Registry Registry           `yaml:"registry"`
 	Target   Target             `yaml:"target"`
