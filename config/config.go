@@ -17,6 +17,7 @@ var projectRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 type Config struct {
 	Project  string             `yaml:"project"`
 	Compose  string             `yaml:"compose"`
+	Vars     map[string]string  `yaml:"vars"`
 	Registry Registry           `yaml:"registry"`
 	Target   Target             `yaml:"target"`
 	Secrets  Secrets            `yaml:"secrets"`
@@ -65,6 +66,10 @@ func Load(path string) (*Config, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
+	}
+	raw, err = interpolate(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	var cfg Config
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
