@@ -42,7 +42,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: goodsmileduck/dockrail/action@main
         with:
-          version: v0.3.0            # pin a dockrail release
+          version: v0.1.0            # pin a dockrail release
           config: deploy.yml
           ssh-key: ${{ secrets.DEPLOY_SSH_KEY }}
           known-hosts: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
@@ -57,7 +57,7 @@ GitLab (MRs instead of PRs):
 ```yaml
 .install_dockrail: &install_dockrail
   - curl -fsSLo /usr/local/bin/dockrail
-    "https://github.com/goodsmileduck/dockrail/releases/download/v0.3.0/dockrail-linux-amd64"
+    "https://github.com/goodsmileduck/dockrail/releases/download/v0.1.0/dockrail-linux-amd64"
   - chmod +x /usr/local/bin/dockrail
   - mkdir -p ~/.ssh && chmod 700 ~/.ssh
   - printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
