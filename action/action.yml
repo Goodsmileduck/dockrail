@@ -1,0 +1,80 @@
+name: "dockrail deploy"
+description: "Deploy a Docker Compose project with dockrail (health-gated, zero-downtime cutover)"
+inputs:
+  version:
+    description: "dockrail release tag to install (e.g. v0.3.0). Ignored when binary-path is set."
+    required: false
+    default: ""
+  binary-path:
+    description: "Path to a pre-built dockrail binary (skips download; used for testing)."
+    required: false
+    default: ""
+  config:
+    description: "Path to deploy.yml"
+    required: false
+    default: "deploy.yml"
+  ssh-key:
+    description: "Private SSH key for the target host (pass a secret). Omit for local-exec targets."
+    required: false
+    default: ""
+  known-hosts:
+    description: "known_hosts entry line(s) for the target host."
+    required: false
+    default: ""
+  dry-run:
+    description: "Run deploy --dry-run and publish the plan to the step summary (use on pull requests)."
+    required: false
+    default: "false"
+  extra-args:
+    description: "Extra arguments appended to dockrail deploy (e.g. --lock-wait 5m once available)."
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Install dockrail
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ -n "${{ inputs.binary-path }}" ]; then
+          install -m 0755 "${{ inputs.binary-path }}" "$RUNNER_TEMP/dockrail"
+          exit 0
+        fi
+        if [ -z "${{ inputs.version }}" ]; then
+          echo "::error::either 'version' or 'binary-path' input is required" >&2
+          exit 1
+        fi
+        base="https://github.com/goodsmileduck/dockrail/releases/download/${{ inputs.version }}"
+        cd "$RUNNER_TEMP"
+        curl -fsSLO "${base}/dockrail-linux-amd64"
+        curl -fsSLO "${base}/checksums.txt"
+        grep ' dockrail-linux-amd64$' checksums.txt | sha256sum -c -
+        chmod 0755 dockrail-linux-amd64
+        mv dockrail-linux-amd64 dockrail
+    - name: Set up SSH
+      if: inputs.ssh-key != ''
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p ~/.ssh && chmod 700 ~/.ssh
+        printf '%s\n' "${{ inputs.ssh-key }}" > ~/.ssh/dockrail_key
+        chmod 600 ~/.ssh/dockrail_key
+        printf '%s\n' "${{ inputs.known-hosts }}" >> ~/.ssh/known_hosts
+        chmod 644 ~/.ssh/known_hosts
+        eval "$(ssh-agent -s)" > /dev/null
+        echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+        echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+        ssh-add ~/.ssh/dockrail_key
+    - name: Deploy
+      shell: bash
+      run: |
+        set -euo pipefail
+        args=(-c "${{ inputs.config }}")
+        if [ "${{ inputs.dry-run }}" = "true" ]; then
+          args+=(--dry-run)
+        fi
+        if [ -n "${{ inputs.extra-args }}" ]; then
+          # shellcheck disable=SC2206 -- intentional word splitting of extra args
+          args+=(${{ inputs.extra-args }})
+        fi
+        "$RUNNER_TEMP/dockrail" deploy "${args[@]}" | tee -a "$GITHUB_STEP_SUMMARY"
