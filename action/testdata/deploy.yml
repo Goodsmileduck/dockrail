@@ -1,0 +1,9 @@
+project: action-smoke
+compose: action/testdata/compose.yml
+vars:
+  tag: "v1"
+services:
+  web:
+    image_tag: "${vars.tag}"
+    readiness: { type: http, path: /health, port: 8080, timeout: 30s }
+    cutover: { strategy: recreate }

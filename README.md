@@ -142,6 +142,10 @@ it skips login and assumes the host is already authenticated. Secret values are
 written to the target env-file or login pipe, but are not passed as command
 arguments to later compose commands or `docker login`.
 
+## Docs
+
+- [GitOps-style workflow](docs/gitops.md) — PR-driven deploys with GitHub Actions or GitLab CI
+
 ## Development
 
 ```bash

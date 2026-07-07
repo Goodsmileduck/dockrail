@@ -1,0 +1,33 @@
+name: action-smoke
+
+on:
+  pull_request:
+    paths:
+      - "action/**"
+      - ".github/workflows/action-smoke.yml"
+      - "**.go"
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    env:
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.4"
+          check-latest: false
+      - name: Build dockrail
+        run: go build -o /tmp/dockrail .
+      - name: Run action (dry-run, local exec)
+        uses: ./action
+        with:
+          binary-path: /tmp/dockrail
+          config: action/testdata/deploy.yml
+          dry-run: "true"
