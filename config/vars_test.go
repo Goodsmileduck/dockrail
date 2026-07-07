@@ -89,3 +89,28 @@ func TestNoVarsBlockStillWorks(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestVarsFlowStyleRejectedWithClearError(t *testing.T) {
+	// vars: { tag: v42 } on one line is not a block mapping; the extraction
+	// regex requires a newline right after "vars:" so this silently yields
+	// an empty vars block today, surfacing as a misleading undefined-var
+	// error instead of naming the real problem.
+	yaml := strings.Replace(varsYAML, "vars:\n  tag: \"v42\"\n  port: \"8010\"\n", `vars: { tag: v42, port: "8010" }`+"\n", 1)
+	_, err := Load(write(t, yaml))
+	if err == nil || !strings.Contains(err.Error(), "block mapping") {
+		t.Fatalf("want error naming block mapping requirement, got %v", err)
+	}
+}
+
+func TestVarsBlockToleratesColumnZeroComment(t *testing.T) {
+	// A full-line comment at column 0 between indented vars entries must
+	// not terminate the block early and silently drop later keys.
+	yaml := strings.Replace(varsYAML, "  tag: \"v42\"\n  port: \"8010\"\n", "  tag: \"v42\"\n# a column-0 comment\n  port: \"8010\"\n", 1)
+	cfg, err := Load(write(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := cfg.Services["web"].Readiness.Port; got != 8010 {
+		t.Errorf("readiness.port = %d, want 8010 (later key after column-0 comment must still resolve)", got)
+	}
+}
