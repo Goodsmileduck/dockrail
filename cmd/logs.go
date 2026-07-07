@@ -22,8 +22,7 @@ func newLogsCmd() *cobra.Command {
 			"returns before the command exits; true tailing is not yet supported.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			path, _ := cmd.Flags().GetString("config")
-			cfg, err := config.Load(path)
+			cfg, conn, err := loadConn(cmd)
 			if err != nil {
 				return err
 			}
@@ -31,7 +30,6 @@ func newLogsCmd() *cobra.Command {
 			if _, ok := cfg.Services[service]; !ok {
 				return fmt.Errorf("unknown service %q", service)
 			}
-			conn := connection.New(cfg.Target)
 			return runLogs(cmd.Context(), conn, cfg, service, tail, follow, cmd.OutOrStdout())
 		},
 	}

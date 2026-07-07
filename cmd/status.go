@@ -18,13 +18,11 @@ func newStatusCmd() *cobra.Command {
 		Use:   "status",
 		Short: "show deployed and running image tags per service",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			path, _ := cmd.Flags().GetString("config")
-			cfg, err := config.Load(path)
+			cfg, conn, err := loadConn(cmd)
 			if err != nil {
 				return err
 			}
 			asJSON, _ := cmd.Flags().GetBool("json")
-			conn := connection.New(cfg.Target)
 			return runStatus(cmd.Context(), conn, cfg, cmd.OutOrStdout(), asJSON)
 		},
 	}

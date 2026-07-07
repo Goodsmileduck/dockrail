@@ -22,37 +22,29 @@ func newLockCmd() *cobra.Command {
 	return c
 }
 
-// loadConn is the shared prologue of the lock subcommands.
-func loadConn(cmd *cobra.Command) (*config.Config, connection.Connection, error) {
-	path, _ := cmd.Flags().GetString("config")
-	cfg, err := config.Load(path)
-	if err != nil {
-		return nil, nil, err
-	}
-	return cfg, connection.New(cfg.Target), nil
-}
-
 func newLockStatusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
 		Short: "show whether the deploy lock is held (exit 0 free, 1 held, 2 error)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, conn, err := loadConn(cmd)
-			if err == nil {
-				var held bool
-				held, err = runLockStatus(cmd.Context(), conn, cfg, cmd.OutOrStdout())
-				if err == nil {
-					if held {
-						os.Exit(1)
-					}
-					return nil
-				}
-			}
 			// Exit 2 for config/connection errors so scripts can tell
 			// "held" (1) apart from "could not answer" (2).
-			cmd.PrintErrln("Error:", err)
-			os.Exit(2)
-			return nil // unreachable
+			fail := func(err error) {
+				cmd.PrintErrln("Error:", err)
+				os.Exit(2)
+			}
+			cfg, conn, err := loadConn(cmd)
+			if err != nil {
+				fail(err)
+			}
+			held, err := runLockStatus(cmd.Context(), conn, cfg, cmd.OutOrStdout())
+			if err != nil {
+				fail(err)
+			}
+			if held {
+				os.Exit(1)
+			}
+			return nil
 		},
 	}
 }

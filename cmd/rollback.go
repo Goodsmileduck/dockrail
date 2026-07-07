@@ -18,13 +18,11 @@ func newRollbackCmd() *cobra.Command {
 		Short: "restore the previous image tag, or an explicit retained TAG",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			path, _ := cmd.Flags().GetString("config")
 			lockWait, _ := cmd.Flags().GetDuration("lock-wait")
-			cfg, err := config.Load(path)
+			cfg, conn, err := loadConn(cmd)
 			if err != nil {
 				return err
 			}
-			conn := connection.New(cfg.Target)
 			tag := ""
 			if len(args) == 1 {
 				tag = args[0]

@@ -18,14 +18,12 @@ func newDeployCmd() *cobra.Command {
 		Use:   "deploy",
 		Short: "deploy the project to the target host",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			path, _ := cmd.Flags().GetString("config")
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
 			lockWait, _ := cmd.Flags().GetDuration("lock-wait")
-			cfg, err := config.Load(path)
+			cfg, conn, err := loadConn(cmd)
 			if err != nil {
 				return err
 			}
-			conn := connection.New(cfg.Target)
 			return runDeploy(cmd.Context(), conn, cfg, cmd.OutOrStdout(), dryRun, lockWait)
 		},
 	}

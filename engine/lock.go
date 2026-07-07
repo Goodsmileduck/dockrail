@@ -48,16 +48,34 @@ func lockHolderDesc(ctx context.Context, conn connection.Connection, project str
 	return desc
 }
 
+// lockCollisionErr wraps a failed lock attempt with the holder description
+// (one extra round-trip to read the metadata) — built only when the failure
+// is surfaced, not on every silent retry of the wait loop.
+func lockCollisionErr(ctx context.Context, conn connection.Connection, project string, err error) error {
+	return fmt.Errorf("another deploy appears to be running: lock %s %s: %w",
+		lockDir(project), lockHolderDesc(ctx, conn, project), err)
+}
+
 // acquireLock takes the per-project deploy lock (atomic mkdir on the target).
 // tag is recorded in the advisory metadata; empty when not deploying a tag
 // (rollback before history is read, manual lock acquire). The returned func
-// releases the lock.
+// releases the lock. On collision the error carries the holder description.
 func acquireLock(ctx context.Context, conn connection.Connection, project, tag string) (func(), error) {
+	release, err := tryLock(ctx, conn, project, tag)
+	if err != nil {
+		return nil, lockCollisionErr(ctx, conn, project, err)
+	}
+	return release, nil
+}
+
+// tryLock is the raw acquisition attempt: atomic mkdir plus the advisory
+// metadata write, returning the bare mkdir error on collision. The wait loop
+// polls this directly so silent retries cost one round-trip, not two.
+func tryLock(ctx context.Context, conn connection.Connection, project, tag string) (func(), error) {
 	dir := lockDir(project)
 	mk := fmt.Sprintf("mkdir -p %s && mkdir %s", projectDir(project), dir)
 	if _, err := conn.Run(ctx, mk); err != nil {
-		return nil, fmt.Errorf("another deploy appears to be running: lock %s %s: %w",
-			dir, lockHolderDesc(ctx, conn, project), err)
+		return nil, err
 	}
 	// Advisory metadata, best effort: transported base64-encoded like
 	// writeSecretsFile so the value never hits shell quoting.
@@ -100,9 +118,12 @@ var lockPollInterval = 5 * time.Second
 // prints one waiting line to out; retries are silent. On timeout the last
 // holder-aware collision error is returned. Ctx cancellation aborts the wait.
 func acquireLockWait(ctx context.Context, conn connection.Connection, project, tag string, wait time.Duration, out io.Writer) (func(), error) {
-	release, err := acquireLock(ctx, conn, project, tag)
-	if err == nil || wait <= 0 {
-		return release, err
+	release, err := tryLock(ctx, conn, project, tag)
+	if err == nil {
+		return release, nil
+	}
+	if wait <= 0 {
+		return nil, lockCollisionErr(ctx, conn, project, err)
 	}
 	fmt.Fprintf(out, "waiting for deploy lock (%s)\n", lockHolderDesc(ctx, conn, project))
 	deadline := time.Now().Add(wait)
@@ -121,12 +142,12 @@ func acquireLockWait(ctx context.Context, conn connection.Connection, project, t
 			return nil, ctx.Err()
 		case <-timer.C:
 		}
-		release, err = acquireLock(ctx, conn, project, tag)
+		release, err = tryLock(ctx, conn, project, tag)
 		if err == nil {
 			return release, nil
 		}
 		if !time.Now().Before(deadline) {
-			return nil, err
+			return nil, lockCollisionErr(ctx, conn, project, err)
 		}
 	}
 }

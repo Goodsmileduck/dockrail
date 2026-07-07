@@ -18,13 +18,11 @@ func newAuditCmd() *cobra.Command {
 		Use:   "audit",
 		Short: "print the deploy history recorded on the target host",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			path, _ := cmd.Flags().GetString("config")
-			cfg, err := config.Load(path)
+			cfg, conn, err := loadConn(cmd)
 			if err != nil {
 				return err
 			}
 			n, _ := cmd.Flags().GetInt("n")
-			conn := connection.New(cfg.Target)
 			return runAudit(cmd.Context(), conn, cfg, cmd.OutOrStdout(), n)
 		},
 	}
