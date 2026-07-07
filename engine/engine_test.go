@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"strings"
 	"testing"
 
@@ -14,8 +16,9 @@ import (
 func engineFixture() (*Engine, *connection.Fake) {
 	f := connection.NewFake()
 	cfg := &config.Config{
-		Project: "demo",
-		Compose: "docker-compose.yml",
+		Project:          "demo",
+		Compose:          "docker-compose.yml",
+		RetainContainers: 5,
 		Services: map[string]config.Service{
 			"web": {
 				ImageTag:  "v2",
@@ -29,20 +32,20 @@ func engineFixture() (*Engine, *connection.Fake) {
 
 func TestDeployHappyPathCommandOrder(t *testing.T) {
 	e, f := engineFixture()
-	f.Stub("state.json", `{"current_tag":"v1"}`, nil)
+	f.Stub("history.jsonl", cannedHistory, nil)
 	if err := e.Deploy(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	all := strings.Join(f.Commands, "\n")
 	// ordered milestones of the recreate sequence:
 	milestones := []string{
-		"docker version",      // preflight
-		"state.json",          // read anchor (once, before any service)
-		"pull",                // recreate: pull NEW
-		"stop web",            // recreate: stop OLD
-		"up -d --no-deps web", // start NEW
-		"curl",                // probe
-		"image prune",         // finalize
+		"docker version",       // preflight
+		"pull",                 // recreate: pull NEW
+		"stop web",             // recreate: stop OLD
+		"up -d --no-deps web",  // start NEW
+		"curl",                 // probe
+		`"outcome":"deployed"`, // finalize: append record (Deploy also reads history.jsonl up front, so match the append payload, not the filename)
+		"image prune",          // finalize: prune
 	}
 	last := -1
 	for _, m := range milestones {
@@ -55,8 +58,8 @@ func TestDeployHappyPathCommandOrder(t *testing.T) {
 		}
 		last = idx
 	}
-	if !strings.Contains(all, `"previous_tag":"v1"`) && !strings.Contains(all, `"previous_tag": "v1"`) {
-		t.Errorf("state save must record previous tag v1:\n%s", all)
+	if !strings.Contains(all, `"outcome":"deployed"`) {
+		t.Errorf("history append must record deployed outcome:\n%s", all)
 	}
 }
 
@@ -64,7 +67,7 @@ func TestDeployWritesSecretsBeforePull(t *testing.T) {
 	t.Setenv("APP_API_KEY", "s3cr3t")
 	e, f := engineFixture()
 	e.Cfg.Secrets.FromEnv = []string{"APP_API_KEY"}
-	f.Stub("state.json", `{"current_tag":"v1"}`, nil)
+	f.Stub("history.jsonl", cannedHistory, nil)
 	if err := e.Deploy(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -88,8 +91,26 @@ func TestDeployReadinessFailureRecordsAndErrors(t *testing.T) {
 		t.Fatalf("want readiness error, got %v", err)
 	}
 	all := strings.Join(f.Commands, "\n")
-	if !strings.Contains(all, "last_failure") {
-		t.Error("failure must be persisted to state file")
+	if !strings.Contains(all, "history.jsonl") || !strings.Contains(all, `"outcome":"failed@deploy"`) {
+		t.Error("failure must be appended to history")
+	}
+}
+
+func TestDeployAppendsFailureRecord(t *testing.T) {
+	f := connection.NewFake()
+	f.Stub("pull", "", fmt.Errorf("boom"))
+	e := &Engine{Conn: f, Cfg: testCfg(false), Out: io.Discard}
+	if err := e.Deploy(context.Background()); err == nil {
+		t.Fatal("want deploy error")
+	}
+	var last string
+	for _, c := range f.Commands {
+		if strings.Contains(c, "history.jsonl") {
+			last = c
+		}
+	}
+	if last == "" || !strings.Contains(last, `"outcome":"failed@deploy"`) {
+		t.Fatalf("no failure record appended: %s", last)
 	}
 }
 
@@ -117,7 +138,7 @@ func TestDeployReleasesLock(t *testing.T) {
 
 func TestRollback_NoPreviousTag(t *testing.T) {
 	e, f := engineFixture()
-	f.Stub("state.json", `{"current_tag":"v2"}`, nil)
+	f.Stub("history.jsonl", `{"ts":"2026-07-06T10:00:00Z","tag":"v2","performer":"ci","outcome":"deployed"}`+"\n", nil)
 	err := e.Rollback(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "no previous") {
 		t.Fatalf("want 'no previous' error, got %v", err)
@@ -131,7 +152,7 @@ func TestRollback_NoPreviousTag(t *testing.T) {
 
 func TestRollback_RestoresPreviousTag(t *testing.T) {
 	e, f := engineFixture()
-	f.Stub("state.json", `{"previous_tag":"v1","current_tag":"v2"}`, nil)
+	f.Stub("history.jsonl", cannedHistory, nil)
 	if err := e.Rollback(context.Background()); err != nil {
 		t.Fatalf("rollback: %v", err)
 	}
@@ -144,18 +165,18 @@ func TestRollback_RestoresPreviousTag(t *testing.T) {
 	}
 	var saved string
 	for _, c := range f.Commands {
-		if strings.Contains(c, "state.json") && strings.Contains(c, "cat >") {
+		if strings.Contains(c, "history.jsonl") && strings.Contains(c, ">>") {
 			saved = c
 		}
 	}
-	if !strings.Contains(saved, `"current_tag":"v1"`) || !strings.Contains(saved, `"previous_tag":"v2"`) {
-		t.Fatalf("state not swapped after rollback, got: %q", saved)
+	if !strings.Contains(saved, `"tag":"v1"`) || !strings.Contains(saved, `"outcome":"rolled-back"`) {
+		t.Fatalf("history not appended after rollback, got: %q", saved)
 	}
 }
 
 func TestRollback_MultiServicePreservesAnchor(t *testing.T) {
 	f := connection.NewFake()
-	f.Stub("state.json", `{"previous_tag":"v1","current_tag":"v2"}`, nil)
+	f.Stub("history.jsonl", cannedHistory, nil)
 	cfg := &config.Config{
 		Project: "demo", Compose: "docker-compose.yml",
 		Services: map[string]config.Service{
@@ -171,18 +192,19 @@ func TestRollback_MultiServicePreservesAnchor(t *testing.T) {
 	if err := e.Rollback(context.Background()); err != nil {
 		t.Fatalf("rollback: %v", err)
 	}
-	// State must be written exactly once, regardless of service count, so the
-	// anchor (previous_tag) is not clobbered by a second service's save.
+	// History must be appended exactly once, regardless of service count, so
+	// the anchor (previous successful record) is not clobbered by a second
+	// service's write.
 	var saves []string
 	for _, c := range f.Commands {
-		if strings.Contains(c, "cat >") && strings.Contains(c, "state.json") {
+		if strings.Contains(c, ">>") && strings.Contains(c, "history.jsonl") {
 			saves = append(saves, c)
 		}
 	}
 	if len(saves) != 1 {
-		t.Fatalf("expected exactly one state save, got %d:\n%v", len(saves), saves)
+		t.Fatalf("expected exactly one history append, got %d:\n%v", len(saves), saves)
 	}
-	if !strings.Contains(saves[0], `"current_tag":"v1"`) || !strings.Contains(saves[0], `"previous_tag":"v2"`) {
+	if !strings.Contains(saves[0], `"tag":"v1"`) || !strings.Contains(saves[0], `"outcome":"rolled-back"`) {
 		t.Fatalf("anchor not preserved: %q", saves[0])
 	}
 }
@@ -192,7 +214,7 @@ func TestDeployProxyStrategyRoutesCutover(t *testing.T) {
 	e, f := engineFixture()
 	e.Cfg.Secrets.FromEnv = []string{"APP_API_KEY"}
 	e.Cfg.Services["web"] = bgService()
-	f.Stub("state.json", `{"current_tag":"v1"}`, nil)
+	f.Stub("history.jsonl", cannedHistory, nil)
 	f.Stub("query-gpu", "0, 2000\n1, 40960\n", nil)
 	f.Stub("ps -q web-blue", "cid-blue\n", nil)
 	if err := e.Deploy(context.Background()); err != nil {

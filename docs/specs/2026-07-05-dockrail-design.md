@@ -87,7 +87,7 @@ this tool only deploys).
 | D8 | Secrets = host `env_file` referenced by compose; injected from CI env | Locked |
 | D9 | `Notifier` is an **interface**; the engine emits events from day one, but no channel ships in v1. First channel = Telegram in v2 | Locked (revised 2026-07-05) |
 | D11 | Cutover = two strategies: `recreate` (blip) and `proxy` (zero-downtime, optional `warmup`); no standalone `blue-green` | Locked |
-| D12 | Two-slot mechanism = generated compose override defining a second named service (`<svc>-next`); live slot recorded in the host state file | Locked |
+| D12 | Two-slot mechanism = generated compose override defining a second named service (`<svc>-next`); live slot derived from running containers | Locked |
 | D13 | GPU degrade path = `placement.on_no_free_gpu: fail \| stop-old-first`, default `fail` | Locked |
 | D10 | This tool **does not build images**; CI builds+pushes, tool deploys a tag | Locked |
 
@@ -165,8 +165,8 @@ target:                                    # v1 = one host
     proxy: jump@bastion.example.com        # ProxyJump host
     # proxy_command: "ssh -W %h:%p bastion" # alternative to proxy
 
-retain_containers: 5                       # stopped OLD containers kept as
-                                           # rollback targets (and their images)
+retain_containers: 5                       # deployed images kept as rollback
+                                           # targets, each with a saved log tail
 hooks_path: .dockrail/hooks                # default; see section 8
 
 secrets:
@@ -265,17 +265,23 @@ Invariant: **OLD keeps serving until NEW is proven ready.** A bare
   recorded in step 2. With a `TAG`, roll back to any version still in the
   retained set (see retention below); candidates are listed by `audit` and
   `status`.
-- **Deploy state on host** — persisted in a per-project state file **on the
-  target host**, so `rollback` and `status` work from any machine/CI runner,
-  not just the one that deployed. The state file is an **append-only deploy
-  history**, one record per attempt: tag, container id, performer (local
-  `$USER`, overridable via `DOCKRAIL_PERFORMER` for CI), timestamp, outcome
-  (deployed / failed@step / rolled-back). The most recent successful record is
-  the step-2 rollback anchor; `dockrail audit` prints the history.
+- **Deploy state on host** — persisted in a per-project append-only
+  `history.jsonl` file **on the target host**, so `rollback` and `status` work
+  from any machine/CI runner, not just the one that deployed. It is an
+  **append-only deploy history**, one record per attempt: tag, container id,
+  performer (local `$USER`, overridable via `DOCKRAIL_PERFORMER` for CI),
+  timestamp, outcome (deployed / failed@step / rolled-back). The most recent
+  successful record is the step-2 rollback anchor; `dockrail audit` prints the
+  history.
 - **Retention** — step 8 prunes by count: the last `retain_containers`
-  (default 5) stopped OLD containers and their images are kept as rollback
-  targets; older ones are removed. Failed NEW containers are exempt until the
-  next deploy's step 0 (forensics, below).
+  (default 5) successfully-deployed images are kept as rollback targets, each
+  with a captured `docker logs --tail 1000` snapshot saved under
+  `$HOME/.dockrail/<project>/logs/` before its container is recreated; older
+  images and snapshots are removed. (The two-slot model, D12, reuses the
+  `<svc>-blue`/`<svc>-green` container names, so retained *containers* cannot
+  exist without un-managing them from compose — the retained unit is images +
+  log tails.) Failed NEW containers are exempt until the next deploy's step 0
+  (forensics, below).
 - **Deploy lock** — a per-project lock file on the host guards the whole state
   machine; a second concurrent deploy fails fast with a clear message (stale
   locks detectable via recorded pid/timestamp). `--lock-wait[=15m]` instead
@@ -308,7 +314,7 @@ Invariant: **OLD keeps serving until NEW is proven ready.** A bare
 - **Failure forensics** — a NEW that fails readiness is stopped but **kept**
   (removed by the next deploy's step 0); the failure output includes the tail
   of its logs, and `status` reports the failed attempt (tag, step, container
-  kept) from the host state file.
+  kept) from the host deploy history.
 - **Notify** — the engine emits success/failure/rollback events (project, tag,
   duration, target) through the `Notifier` interface. v1 ships no channel —
   exit codes + structured logs are the signal; Telegram is the first v2

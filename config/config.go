@@ -21,6 +21,10 @@ type Config struct {
 	Target   Target             `yaml:"target"`
 	Secrets  Secrets            `yaml:"secrets"`
 	Services map[string]Service `yaml:"services"`
+	// RetainContainers is the rollback window: how many distinct recent
+	// deployed tags' images and saved log tails are kept. 0 in yaml means
+	// "unset" and is defaulted to 5 in Load; negative values are rejected.
+	RetainContainers int `yaml:"retain_containers"`
 }
 type Registry struct {
 	Server string `yaml:"server"`
@@ -68,6 +72,9 @@ func Load(path string) (*Config, error) {
 	if err := dec.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
+	if cfg.RetainContainers == 0 {
+		cfg.RetainContainers = 5
+	}
 	if err := cfg.validate(); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
@@ -86,6 +93,9 @@ func (c *Config) validate() error {
 	}
 	if c.Compose == "" {
 		return fmt.Errorf("compose is required")
+	}
+	if c.RetainContainers < 0 {
+		return fmt.Errorf("retain_containers must be >= 1")
 	}
 	if len(c.Services) == 0 {
 		return fmt.Errorf("at least one entry under services is required")
