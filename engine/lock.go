@@ -130,3 +130,44 @@ func acquireLockWait(ctx context.Context, conn connection.Connection, project, t
 		}
 	}
 }
+
+// LockStatus reports whether the deploy lock is held, with a holder
+// description when it is. The probe command always exits 0 so a Run error
+// means the connection itself failed, not "lock absent".
+func (e *Engine) LockStatus(ctx context.Context) (bool, string, error) {
+	out, err := e.Conn.Run(ctx,
+		fmt.Sprintf("if test -d %s; then echo held; else echo free; fi", lockDir(e.Cfg.Project)))
+	if err != nil {
+		return false, "", err
+	}
+	if strings.TrimSpace(out) != "held" {
+		return false, "", nil
+	}
+	return true, lockHolderDesc(ctx, e.Conn, e.Cfg.Project), nil
+}
+
+// LockAcquire takes the deploy lock without releasing it — a manual freeze
+// (e.g. before host maintenance). Cleared by LockRelease.
+func (e *Engine) LockAcquire(ctx context.Context) error {
+	_, err := acquireLock(ctx, e.Conn, e.Cfg.Project, "")
+	return err
+}
+
+// LockRelease removes the deploy lock unconditionally and returns the
+// displaced holder's description ("" if the lock was not held). It is the
+// human override for stale locks; it performs no staleness check, so it can
+// displace a live deploy — callers surface who was displaced.
+func (e *Engine) LockRelease(ctx context.Context) (string, error) {
+	held, desc, err := e.LockStatus(ctx)
+	if err != nil {
+		return "", err
+	}
+	if !held {
+		return "", nil
+	}
+	if _, err := e.Conn.Run(ctx, fmt.Sprintf("rm -f %s && rmdir %s",
+		lockInfoPath(e.Cfg.Project), lockDir(e.Cfg.Project))); err != nil {
+		return "", err
+	}
+	return desc, nil
+}

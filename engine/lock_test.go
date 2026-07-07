@@ -11,8 +11,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/goodsmileduck/dockrail/config"
 	"github.com/goodsmileduck/dockrail/connection"
 )
+
+func demoCfg() *config.Config {
+	return &config.Config{Project: "demo", Compose: "docker-compose.yml"}
+}
 
 func TestAcquireLockWritesMetadataAndReleaseCleansUp(t *testing.T) {
 	f := connection.NewFake()
@@ -176,5 +181,58 @@ func TestLockWaitRespectsContextCancel(t *testing.T) {
 	_, err := acquireLockWait(ctx, f, "demo", "v42", time.Minute, &buf)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("want context.Canceled, got %v", err)
+	}
+}
+
+func TestLockStatusFree(t *testing.T) {
+	f := connection.NewFake() // default output "" -> not "held"
+	e := &Engine{Conn: f, Cfg: demoCfg(), Out: &bytes.Buffer{}}
+	held, _, err := e.LockStatus(context.Background())
+	if err != nil || held {
+		t.Fatalf("want free, got held=%v err=%v", held, err)
+	}
+}
+
+func TestLockStatusHeldWithMetadata(t *testing.T) {
+	f := connection.NewFake()
+	f.Stub("if test -d $HOME/.dockrail/demo/lock", "held", nil)
+	f.Stub("cat $HOME/.dockrail/demo/lock/info.json",
+		`{"acquired_at":"2026-07-07T10:00:00Z","tag":"v41","by":"ci@runner"}`, nil)
+	e := &Engine{Conn: f, Cfg: demoCfg(), Out: &bytes.Buffer{}}
+	held, desc, err := e.LockStatus(context.Background())
+	if err != nil || !held {
+		t.Fatalf("want held, got held=%v err=%v", held, err)
+	}
+	if !strings.Contains(desc, "held by ci@runner") {
+		t.Errorf("desc = %q", desc)
+	}
+}
+
+func TestLockReleaseWhenHeld(t *testing.T) {
+	f := connection.NewFake()
+	f.Stub("if test -d $HOME/.dockrail/demo/lock", "held", nil)
+	e := &Engine{Conn: f, Cfg: demoCfg(), Out: &bytes.Buffer{}}
+	desc, err := e.LockRelease(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if desc == "" {
+		t.Error("want displaced holder description")
+	}
+	if !strings.Contains(strings.Join(f.Commands, "\n"),
+		"rm -f $HOME/.dockrail/demo/lock/info.json && rmdir $HOME/.dockrail/demo/lock") {
+		t.Error("release command not issued")
+	}
+}
+
+func TestLockReleaseWhenFree(t *testing.T) {
+	f := connection.NewFake()
+	e := &Engine{Conn: f, Cfg: demoCfg(), Out: &bytes.Buffer{}}
+	desc, err := e.LockRelease(context.Background())
+	if err != nil || desc != "" {
+		t.Fatalf("free lock: want empty desc and nil err, got %q %v", desc, err)
+	}
+	if strings.Contains(strings.Join(f.Commands, "\n"), "rmdir") {
+		t.Error("must not rmdir a free lock")
 	}
 }
