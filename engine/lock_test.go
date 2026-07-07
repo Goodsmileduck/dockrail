@@ -147,6 +147,25 @@ func TestLockWaitZeroFailsFast(t *testing.T) {
 	}
 }
 
+func TestLockWaitShorterThanPollIntervalStillRetries(t *testing.T) {
+	old := lockPollInterval
+	lockPollInterval = 50 * time.Millisecond
+	t.Cleanup(func() { lockPollInterval = old })
+
+	c := &flakyLockConn{Fake: connection.NewFake(), failures: 1}
+	var buf bytes.Buffer
+	start := time.Now()
+	release, err := acquireLockWait(context.Background(), c, "demo", "v42", 10*time.Millisecond, &buf)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("want single retry at deadline to succeed, got %v", err)
+	}
+	release()
+	if elapsed >= lockPollInterval {
+		t.Errorf("elapsed %v should be well under poll interval %v (deadline-clamped retry)", elapsed, lockPollInterval)
+	}
+}
+
 func TestLockWaitRespectsContextCancel(t *testing.T) {
 	fastPoll(t)
 	f := connection.NewFake()

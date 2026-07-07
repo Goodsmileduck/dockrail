@@ -107,16 +107,25 @@ func acquireLockWait(ctx context.Context, conn connection.Connection, project, t
 	fmt.Fprintf(out, "waiting for deploy lock (%s)\n", lockHolderDesc(ctx, conn, project))
 	deadline := time.Now().Add(wait)
 	for {
+		sleep := lockPollInterval
+		if remaining := time.Until(deadline); remaining < sleep {
+			sleep = remaining
+		}
+		if sleep < 0 {
+			sleep = 0
+		}
+		timer := time.NewTimer(sleep)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return nil, ctx.Err()
-		case <-time.After(lockPollInterval):
+		case <-timer.C:
 		}
 		release, err = acquireLock(ctx, conn, project, tag)
 		if err == nil {
 			return release, nil
 		}
-		if time.Now().After(deadline) {
+		if !time.Now().Before(deadline) {
 			return nil, err
 		}
 	}
