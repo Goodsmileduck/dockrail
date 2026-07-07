@@ -35,7 +35,8 @@ After the `mkdir` succeeds, `acquireLock` writes `<lockdir>/info.json`:
 - `tag` = the tag being deployed; empty for `rollback` (tag not yet known at
   lock time) and `lock acquire`.
 - Metadata write failure does not fail the acquisition (the mkdir is the
-  lock; the file is advisory) — but is logged.
+  lock; the file is advisory) and is silently tolerated — the collision
+  error's "no holder metadata" fallback covers the resulting gap.
 - **Accepted gap:** a crash or dropped connection between the `mkdir` and
   the metadata write leaves a held lock with no `info.json` — reported as
   "no holder metadata", indistinguishable from a pre-metadata lock dir.
