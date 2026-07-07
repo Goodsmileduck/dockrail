@@ -28,10 +28,15 @@ Or grab a prebuilt binary from the [Releases](../../releases) page.
 dockrail check              # validate config + probe target host readiness
 dockrail deploy --dry-run   # print the plan without mutating the host
 dockrail deploy             # pull, recreate, wait for readiness, cut over
+dockrail deploy --lock-wait 5m # wait for a concurrent deploy's lock instead of failing
 dockrail rollback           # restore the previously deployed image tag
 dockrail status             # show deployed + running tag per service
 dockrail status --json      # same, as machine-readable JSON (for agents/scripts)
 dockrail logs web --tail 50 # show a service's logs on the target host
+dockrail audit              # print the deploy history recorded on the target host
+dockrail lock status         # show whether the deploy lock is held
+dockrail lock acquire        # take the deploy lock manually (freeze deploys)
+dockrail lock release        # remove the deploy lock unconditionally (stale-lock override)
 dockrail --version
 ```
 

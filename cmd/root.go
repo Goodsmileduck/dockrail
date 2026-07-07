@@ -29,7 +29,19 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newStatusCmd())
 	root.AddCommand(newLogsCmd())
 	root.AddCommand(newAuditCmd())
+	root.AddCommand(newLockCmd())
 	return root
+}
+
+// loadConn is the shared command prologue: load the -c config and open the
+// connection its target describes.
+func loadConn(cmd *cobra.Command) (*config.Config, connection.Connection, error) {
+	path, _ := cmd.Flags().GetString("config")
+	cfg, err := config.Load(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	return cfg, connection.New(cfg.Target), nil
 }
 
 func newCheckCmd() *cobra.Command {
@@ -37,12 +49,10 @@ func newCheckCmd() *cobra.Command {
 		Use:   "check",
 		Short: "validate config and target host readiness",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			path, _ := cmd.Flags().GetString("config")
-			cfg, err := config.Load(path)
+			cfg, conn, err := loadConn(cmd)
 			if err != nil {
 				return err
 			}
-			conn := connection.New(cfg.Target)
 			errs := engine.Preflight(cmd.Context(), conn, cfg)
 			for _, e := range errs {
 				fmt.Fprintln(cmd.ErrOrStderr(), "FAIL:", e)

@@ -6,6 +6,7 @@ import (
 	"io"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/goodsmileduck/dockrail/config"
 	"github.com/goodsmileduck/dockrail/connection"
@@ -16,6 +17,9 @@ type Engine struct {
 	Conn connection.Connection
 	Cfg  *config.Config
 	Out  io.Writer
+	// LockWait is how long Deploy/Rollback wait for the deploy lock before
+	// giving up. Zero = fail fast (the default).
+	LockWait time.Duration
 }
 
 // safeTag guards image tags before they are interpolated into a host shell
@@ -29,7 +33,7 @@ func (e *Engine) logf(format string, a ...any) {
 
 func (e *Engine) Deploy(ctx context.Context) error {
 	e.logf("step lock")
-	release, err := acquireLock(ctx, e.Conn, e.Cfg.Project)
+	release, err := acquireLockWait(ctx, e.Conn, e.Cfg.Project, lockTag(e.Cfg), e.LockWait, e.Out)
 	if err != nil {
 		return err
 	}
@@ -92,7 +96,7 @@ func (e *Engine) runServices(ctx context.Context, tagFor func(config.Service) st
 // same previous tag.
 func (e *Engine) Rollback(ctx context.Context) error {
 	e.logf("step lock")
-	release, err := acquireLock(ctx, e.Conn, e.Cfg.Project)
+	release, err := acquireLockWait(ctx, e.Conn, e.Cfg.Project, "", e.LockWait, e.Out)
 	if err != nil {
 		return err
 	}
@@ -117,7 +121,7 @@ func (e *Engine) RollbackTo(ctx context.Context, tag string) error {
 		return fmt.Errorf("unsafe image tag %q", tag)
 	}
 	e.logf("step lock")
-	release, err := acquireLock(ctx, e.Conn, e.Cfg.Project)
+	release, err := acquireLockWait(ctx, e.Conn, e.Cfg.Project, "", e.LockWait, e.Out)
 	if err != nil {
 		return err
 	}

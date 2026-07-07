@@ -35,7 +35,7 @@ func TestRunRollbackRestoresPreviousTag(t *testing.T) {
 		}},
 	}
 	var out bytes.Buffer
-	if err := runRollback(context.Background(), f, cfg, &out, ""); err != nil {
+	if err := runRollback(context.Background(), f, cfg, &out, "", 0); err != nil {
 		t.Fatalf("rollback: %v", err)
 	}
 	if !strings.Contains(strings.Join(f.Commands, "\n"),
@@ -59,7 +59,7 @@ func TestRunRollbackToExplicitTag(t *testing.T) {
 		}},
 	}
 	var out bytes.Buffer
-	if err := runRollback(context.Background(), f, cfg, &out, "v1"); err != nil {
+	if err := runRollback(context.Background(), f, cfg, &out, "v1", 0); err != nil {
 		t.Fatalf("rollback: %v", err)
 	}
 	if !strings.Contains(strings.Join(f.Commands, "\n"), "TAG=v1") {

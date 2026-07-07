@@ -25,8 +25,12 @@ inputs:
     description: "Run deploy --dry-run and publish the plan to the step summary (use on pull requests)."
     required: false
     default: "false"
+  lock-wait:
+    description: "Wait up to this long for the deploy lock (passed as --lock-wait). Empty disables waiting."
+    required: false
+    default: "5m"
   extra-args:
-    description: "Extra arguments appended to dockrail deploy (e.g. --lock-wait 5m once available)."
+    description: "Extra arguments appended to dockrail deploy."
     required: false
     default: ""
 runs:
@@ -72,6 +76,9 @@ runs:
         args=(-c "${{ inputs.config }}")
         if [ "${{ inputs.dry-run }}" = "true" ]; then
           args+=(--dry-run)
+        fi
+        if [ -n "${{ inputs.lock-wait }}" ]; then
+          args+=(--lock-wait "${{ inputs.lock-wait }}")
         fi
         if [ -n "${{ inputs.extra-args }}" ]; then
           # shellcheck disable=SC2206 -- intentional word splitting of extra args

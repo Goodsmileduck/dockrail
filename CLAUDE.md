@@ -101,14 +101,15 @@ lives in `engine/`, not `strategy/cutover/`) · readiness `http` / `tcp` /
 `vllm` (`strategy/readiness/`) · `gpu` placement with nvidia-smi VRAM probe
 (`strategy/placement/`) · deploy history + `audit` + `rollback [TAG]` +
 `retain_containers` retention with log-tail capture (`engine/history.go`,
-`engine/audit.go`, `engine/retention.go`, `cmd/audit.go`).
+`engine/audit.go`, `engine/retention.go`, `cmd/audit.go`) · deploy lock with
+`--lock-wait`, holder metadata, and lock status/acquire/release
+(`engine/lock.go`, `cmd/lock.go`).
 
 **Remaining for v1:**
 
-1. `config` and `lock` commands.
-2. Deploy lock with `--lock-wait`.
-3. Lifecycle hooks (`.dockrail/hooks`).
-4. Dogfood on the internal ML services (routed API service first, then a
+1. `config` command.
+2. Lifecycle hooks (`.dockrail/hooks`).
+3. Dogfood on the internal ML services (routed API service first, then a
    GPU/vLLM one).
 
 ## Open items (see spec section 13)

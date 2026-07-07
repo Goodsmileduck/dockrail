@@ -42,11 +42,12 @@ jobs:
       - uses: actions/checkout@v7
       - uses: goodsmileduck/dockrail/action@main
         with:
-          version: v0.1.0            # pin a dockrail release
+          version: v0.2.0            # pin a dockrail release
           config: deploy.yml
           ssh-key: ${{ secrets.DEPLOY_SSH_KEY }}
           known-hosts: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
           dry-run: ${{ github.event_name == 'pull_request' }}
+          lock-wait: 5m
 ```
 
 ## GitLab CI
@@ -57,7 +58,7 @@ GitLab (MRs instead of PRs):
 ```yaml
 .install_dockrail: &install_dockrail
   - curl -fsSLo /usr/local/bin/dockrail
-    "https://github.com/goodsmileduck/dockrail/releases/download/v0.1.0/dockrail-linux-amd64"
+    "https://github.com/goodsmileduck/dockrail/releases/download/v0.2.0/dockrail-linux-amd64"
   - chmod +x /usr/local/bin/dockrail
   - mkdir -p ~/.ssh && chmod 700 ~/.ssh
   - printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
@@ -80,11 +81,24 @@ deploy:
       changes: [deploy.yml]
   script:
     - *install_dockrail
-    - dockrail deploy
+    - dockrail deploy --lock-wait 5m
 ```
 
 Gitea/Forgejo runners are GitHub-Actions compatible; the action above
 generally works as-is.
+
+## The deploy lock
+
+Concurrent deploys to the same host are serialized by a per-project lock on
+the target. `--lock-wait 5m` makes a second deploy wait instead of failing —
+use it in CI so back-to-back merges queue up. `dockrail lock status` shows
+who holds the lock; `dockrail lock release` clears a stale one (e.g. after a
+crashed deploy).
+
+Do **not** wire `dockrail lock release` into automated cleanup: it has no
+staleness check, so a script can force-release a lock held by a live, slow
+deploy (LLM model warmup can legitimately take many minutes). Releasing is a
+human decision.
 
 ## Repo layouts
 
