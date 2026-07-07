@@ -29,7 +29,7 @@ func (e *Engine) logf(format string, a ...any) {
 
 func (e *Engine) Deploy(ctx context.Context) error {
 	e.logf("step lock")
-	release, err := acquireLock(ctx, e.Conn, e.Cfg.Project)
+	release, err := acquireLock(ctx, e.Conn, e.Cfg.Project, lockTag(e.Cfg))
 	if err != nil {
 		return err
 	}
@@ -92,7 +92,7 @@ func (e *Engine) runServices(ctx context.Context, tagFor func(config.Service) st
 // same previous tag.
 func (e *Engine) Rollback(ctx context.Context) error {
 	e.logf("step lock")
-	release, err := acquireLock(ctx, e.Conn, e.Cfg.Project)
+	release, err := acquireLock(ctx, e.Conn, e.Cfg.Project, "")
 	if err != nil {
 		return err
 	}
@@ -117,7 +117,7 @@ func (e *Engine) RollbackTo(ctx context.Context, tag string) error {
 		return fmt.Errorf("unsafe image tag %q", tag)
 	}
 	e.logf("step lock")
-	release, err := acquireLock(ctx, e.Conn, e.Cfg.Project)
+	release, err := acquireLock(ctx, e.Conn, e.Cfg.Project, "")
 	if err != nil {
 		return err
 	}
