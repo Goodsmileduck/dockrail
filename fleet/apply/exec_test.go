@@ -35,12 +35,16 @@ func TestPlace_WritesOverrideAndComposeUp(t *testing.T) {
 		if strings.Contains(c, "DOCKRAILEOF") && strings.Contains(c, "llama-0") {
 			sawWrite = true
 		}
-		if strings.Contains(c, "docker compose") && strings.Contains(c, "up -d") && strings.Contains(c, "llama-0") {
+		// The up must pass BOTH the base compose (for top-level networks/volumes,
+		// which `extends` does not copy) and the override.
+		if strings.Contains(c, "docker compose") && strings.Contains(c, "up -d") &&
+			strings.Contains(c, "-f docker-compose.yml") && strings.Contains(c, "-f .dockrail-llama-0") &&
+			strings.Contains(c, "--no-deps llama-0") {
 			sawUp = true
 		}
 	}
 	if !sawWrite || !sawUp {
-		t.Fatalf("want override write + compose up for llama-0; commands: %v", f.Commands)
+		t.Fatalf("want override write + two-file compose up for llama-0; commands: %v", f.Commands)
 	}
 }
 

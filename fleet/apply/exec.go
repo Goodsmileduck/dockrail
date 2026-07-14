@@ -71,7 +71,10 @@ func (x *actionExec) place(ctx context.Context, a plan.Action) error {
 		return fmt.Errorf("place %s: write override: %w", name, err)
 	}
 	x.logf("place %s on %s:%d (%s)", name, a.Host, a.GPU, a.Tag)
-	up := fmt.Sprintf("TAG=%s docker compose -f %s up -d --no-deps %s", a.Tag, ov, name)
+	// Both files: the base supplies top-level networks/volumes (which `extends`
+	// does NOT copy), the override adds the per-replica service. `--no-deps`
+	// starts only this replica, not the template service or its deps.
+	up := fmt.Sprintf("TAG=%s docker compose -f %s -f %s up -d --no-deps %s", a.Tag, x.cfg.Compose, ov, name)
 	if _, err := x.conn.Run(ctx, up); err != nil {
 		return fmt.Errorf("place %s: compose up: %w", name, err)
 	}
@@ -95,7 +98,9 @@ func (x *actionExec) deployService(ctx context.Context, a plan.Action) error {
 		return fmt.Errorf("deploy %s: write override: %w", a.Service, err)
 	}
 	x.logf("deploy service %s on %s (%s)", a.Service, a.Host, a.Tag)
-	up := fmt.Sprintf("TAG=%s docker compose -f %s up -d --no-deps %s", a.Tag, ov, a.Service)
+	// Both files: base supplies top-level networks/volumes, override adds the
+	// service definition. See place() for why `extends` alone is insufficient.
+	up := fmt.Sprintf("TAG=%s docker compose -f %s -f %s up -d --no-deps %s", a.Tag, x.cfg.Compose, ov, a.Service)
 	if _, err := x.conn.Run(ctx, up); err != nil {
 		return fmt.Errorf("deploy %s: compose up: %w", a.Service, err)
 	}
