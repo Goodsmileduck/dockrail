@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"regexp"
+	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -114,4 +117,109 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-func (c *Config) validate() error { return nil }
+var nameRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+func (c *Config) validate() error {
+	if c.Project == "" {
+		return fmt.Errorf("project is required")
+	}
+	if !nameRe.MatchString(c.Project) {
+		return fmt.Errorf("project %q must match %s", c.Project, nameRe.String())
+	}
+	if len(c.Hosts) == 0 {
+		return fmt.Errorf("at least one entry under hosts is required")
+	}
+	// gpuIndex[host] is the set of declared GPU indices, used to validate pins.
+	gpuIndex := make(map[string]map[int]bool, len(c.Hosts))
+	for name, h := range c.Hosts {
+		if !nameRe.MatchString(name) {
+			return fmt.Errorf("hosts.%s: name must match %s", name, nameRe.String())
+		}
+		if h.SSH == "" {
+			return fmt.Errorf("hosts.%s: ssh is required", name)
+		}
+		set := make(map[int]bool, len(h.GPUs))
+		for _, g := range h.GPUs {
+			set[g] = true
+		}
+		gpuIndex[name] = set
+	}
+	for name, b := range c.Backends {
+		if !nameRe.MatchString(name) {
+			return fmt.Errorf("backends.%s: name must match %s", name, nameRe.String())
+		}
+		if b.ImageTag == "" {
+			return fmt.Errorf("backends.%s: image_tag is required", name)
+		}
+		if b.Replicas == 0 {
+			b.Replicas = 1
+			c.Backends[name] = b
+		}
+		if b.Replicas < 0 {
+			return fmt.Errorf("backends.%s: replicas must be >= 1", name)
+		}
+		p := b.Placement
+		if p.GPU.Auto {
+			if len(p.Pool) == 0 {
+				return fmt.Errorf("backends.%s: placement.pool is required when gpu: auto", name)
+			}
+			for _, host := range p.Pool {
+				if _, ok := c.Hosts[host]; !ok {
+					return fmt.Errorf("backends.%s: placement.pool references unknown host %q", name, host)
+				}
+			}
+		}
+		for _, pin := range p.GPU.Pins {
+			host, idx, err := parsePin(pin)
+			if err != nil {
+				return fmt.Errorf("backends.%s: %w", name, err)
+			}
+			if _, ok := gpuIndex[host]; !ok {
+				return fmt.Errorf("backends.%s: gpu pin %q references unknown host", name, pin)
+			}
+			if !gpuIndex[host][idx] {
+				return fmt.Errorf("backends.%s: gpu pin %q: host %q has no gpu %d", name, pin, host, idx)
+			}
+		}
+	}
+	for name, s := range c.Services {
+		if !nameRe.MatchString(name) {
+			return fmt.Errorf("services.%s: name must match %s", name, nameRe.String())
+		}
+		if s.Host == "" {
+			return fmt.Errorf("services.%s: host is required", name)
+		}
+		if _, ok := c.Hosts[s.Host]; !ok {
+			return fmt.Errorf("services.%s: host %q is not a declared host", name, s.Host)
+		}
+		for _, u := range s.Uses {
+			if _, ok := c.Backends[u.Backend]; !ok {
+				return fmt.Errorf("services.%s: uses references unknown backend %q", name, u.Backend)
+			}
+			switch u.Wiring.Strategy {
+			case "nginx-upstream":
+			case "env-list":
+				if u.Wiring.Var == "" {
+					return fmt.Errorf("services.%s: env-list wiring requires var", name)
+				}
+			default:
+				return fmt.Errorf("services.%s: wiring.strategy must be nginx-upstream|env-list, got %q", name, u.Wiring.Strategy)
+			}
+		}
+	}
+	return nil
+}
+
+// parsePin splits a "host:index" GPU pin.
+func parsePin(pin string) (host string, idx int, err error) {
+	i := strings.LastIndex(pin, ":")
+	if i < 0 {
+		return "", 0, fmt.Errorf("gpu pin %q must be host:index", pin)
+	}
+	host = pin[:i]
+	idx, err = strconv.Atoi(pin[i+1:])
+	if err != nil {
+		return "", 0, fmt.Errorf("gpu pin %q: bad index: %w", pin, err)
+	}
+	return host, idx, nil
+}

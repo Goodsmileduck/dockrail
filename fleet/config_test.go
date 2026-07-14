@@ -89,3 +89,83 @@ func TestLoad_RejectsUnknownKey(t *testing.T) {
 		t.Fatal("expected error on unknown key")
 	}
 }
+
+func TestValidate_Rejections(t *testing.T) {
+	cases := map[string]string{
+		"bad project": `
+project: "bad name"
+hosts: { a: { ssh: u@h, gpus: [0] } }
+`,
+		"no hosts": `
+project: p
+backends: { b: { image_tag: t, replicas: 1 } }
+`,
+		"pin to unknown host": `
+project: p
+hosts: { a: { ssh: u@h, gpus: [0,1] } }
+backends:
+  b: { image_tag: t, replicas: 1, placement: { vram_min: 1GiB, gpu: [zzz:0] } }
+`,
+		"pin to absent gpu index": `
+project: p
+hosts: { a: { ssh: u@h, gpus: [0,1] } }
+backends:
+  b: { image_tag: t, replicas: 1, placement: { vram_min: 1GiB, gpu: [a:7] } }
+`,
+		"auto without pool": `
+project: p
+hosts: { a: { ssh: u@h, gpus: [0] } }
+backends:
+  b: { image_tag: t, replicas: 1, placement: { vram_min: 1GiB, gpu: auto } }
+`,
+		"service host unknown": `
+project: p
+hosts: { a: { ssh: u@h, gpus: [0] } }
+services:
+  s: { host: nope, readiness: { type: http }, cutover: { strategy: recreate } }
+`,
+		"uses unknown backend": `
+project: p
+hosts: { a: { ssh: u@h, gpus: [0] } }
+services:
+  s:
+    host: a
+    uses: [ { backend: ghost, wiring: { strategy: nginx-upstream } } ]
+    readiness: { type: http }
+    cutover: { strategy: recreate }
+`,
+		"env-list without var": `
+project: p
+hosts: { a: { ssh: u@h, gpus: [0] } }
+backends: { b: { image_tag: t, replicas: 1 } }
+services:
+  s:
+    host: a
+    uses: [ { backend: b, wiring: { strategy: env-list } } ]
+    readiness: { type: http }
+    cutover: { strategy: recreate }
+`,
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Load(writeTemp(t, body)); err == nil {
+				t.Fatalf("expected error for %q", name)
+			}
+		})
+	}
+}
+
+func TestValidate_ReplicasDefaultsToOne(t *testing.T) {
+	body := `
+project: p
+hosts: { a: { ssh: u@h, gpus: [0] } }
+backends: { b: { image_tag: t } }
+`
+	cfg, err := Load(writeTemp(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Backends["b"].Replicas != 1 {
+		t.Fatalf("replicas default = %d, want 1", cfg.Backends["b"].Replicas)
+	}
+}
