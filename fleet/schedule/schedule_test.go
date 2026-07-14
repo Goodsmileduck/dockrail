@@ -203,3 +203,49 @@ func TestPlan_FirstFit(t *testing.T) {
 		t.Fatalf("first-fit should pick gpu0, got %+v", got["b"])
 	}
 }
+
+func TestPlanDelta_KeepsAndPlacesMissing(t *testing.T) {
+	cfg := &fleet.Config{
+		Backends: map[string]fleet.Backend{
+			"llama": {ImageTag: "t", Replicas: 2, Placement: fleet.Placement{
+				VRAMMin: "10GiB", Pool: []string{"h"}, GPU: fleet.GPUSpec{Auto: true},
+			}},
+		},
+	}
+	// Two GPUs. Replica 0 already runs on gpu0 (kept). gpu0's free already
+	// reflects that (12288 left); gpu1 is full-free.
+	state := observe.FleetState{Hosts: []observe.HostState{
+		{Name: "h", GPUs: []observe.GPUState{gpu(0, 12288), gpu(1, 24576)}},
+	}}
+	kept := Placements{"llama": {{Replica: 0, Host: "h", GPU: 0}}}
+	got, err := PlanDelta(cfg, state, kept)
+	if err != nil {
+		t.Fatalf("PlanDelta: %v", err)
+	}
+	as := got["llama"]
+	if len(as) != 2 {
+		t.Fatalf("want 2, got %+v", as)
+	}
+	// replica 0 echoed on gpu0; replica 1 must be placed on gpu1 (anti-affinity
+	// forbids gpu0, and gpu1 is the only other GPU).
+	byR := map[int]Assignment{}
+	for _, a := range as {
+		byR[a.Replica] = a
+	}
+	if byR[0].GPU != 0 || byR[1].GPU != 1 {
+		t.Fatalf("delta placement wrong: %+v", as)
+	}
+}
+
+func TestPlan_DelegatesToPlanDelta(t *testing.T) {
+	// Plan(cfg, state) must equal PlanDelta(cfg, state, nil).
+	cfg := &fleet.Config{Backends: map[string]fleet.Backend{
+		"b": {ImageTag: "t", Replicas: 1, Placement: fleet.Placement{VRAMMin: "10GiB", Pool: []string{"h"}, GPU: fleet.GPUSpec{Auto: true}}},
+	}}
+	state := observe.FleetState{Hosts: []observe.HostState{{Name: "h", GPUs: []observe.GPUState{gpu(0, 24576)}}}}
+	a, _ := Plan(cfg, state)
+	b, _ := PlanDelta(cfg, state, nil)
+	if len(a["b"]) != 1 || len(b["b"]) != 1 || a["b"][0] != b["b"][0] {
+		t.Fatalf("Plan != PlanDelta(nil): %+v vs %+v", a, b)
+	}
+}
