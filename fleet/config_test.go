@@ -17,6 +17,7 @@ func writeTemp(t *testing.T, body string) string {
 
 const goodFleet = `
 project: ml-platform
+compose: docker-compose.yml
 registry: { server: registry.example.com/acme/ml }
 hosts:
   gpu-a:
@@ -28,6 +29,7 @@ hosts:
     gpus: [0,1]
 backends:
   llama-70b:
+    service: llama-70b
     image_tag: "vllm-v0.9.2"
     model: /models/llama70b/best
     replicas: 3
@@ -37,6 +39,7 @@ backends:
       pool: [gpu-a, gpu-b]
     readiness: { type: vllm, timeout: 300s }
   embed-small:
+    service: embed-small
     image_tag: "vllm-v0.9.2"
     replicas: 2
     placement:
@@ -45,6 +48,7 @@ backends:
     readiness: { type: vllm, timeout: 180s }
 services:
   chat-api:
+    service: chat-api
     host: gpu-a
     image_tag: "${TAG}"
     uses:
@@ -55,6 +59,7 @@ services:
 `
 
 func TestLoad_GoodFleet(t *testing.T) {
+	t.Setenv("TAG", "app-v1.0.0") // chat-api uses image_tag: "${TAG}" (CI provides it)
 	cfg, err := Load(writeTemp(t, goodFleet))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -158,8 +163,9 @@ services:
 func TestValidate_ReplicasDefaultsToOne(t *testing.T) {
 	body := `
 project: p
+compose: docker-compose.yml
 hosts: { a: { ssh: u@h, gpus: [0] } }
-backends: { b: { image_tag: t, placement: { vram_min: 1GiB, gpu: auto, pool: [a] } } }
+backends: { b: { image_tag: t, service: b, placement: { vram_min: 1GiB, gpu: auto, pool: [a] } } }
 `
 	cfg, err := Load(writeTemp(t, body))
 	if err != nil {
@@ -173,10 +179,12 @@ backends: { b: { image_tag: t, placement: { vram_min: 1GiB, gpu: auto, pool: [a]
 func TestLoad_SchedulerPolicy(t *testing.T) {
 	body := `
 project: p
+compose: docker-compose.yml
 scheduler: { policy: binpack }
 hosts: { a: { ssh: u@h, gpus: [0] } }
 backends:
   b:
+    service: b
     image_tag: t
     placement: { vram_min: 1GiB, gpu: auto, pool: [a], policy: spread }
 `
@@ -216,9 +224,10 @@ backends:
 func TestLoad_PinnedReplicasDefaultToPinCount(t *testing.T) {
 	body := `
 project: p
+compose: docker-compose.yml
 hosts: { a: { ssh: u@h, gpus: [0,1] } }
 backends:
-  b: { image_tag: t, placement: { vram_min: 1GiB, gpu: [a:0, a:1] } }
+  b: { image_tag: t, service: b, placement: { vram_min: 1GiB, gpu: [a:0, a:1] } }
 `
 	cfg, err := Load(writeTemp(t, body))
 	if err != nil {
@@ -232,9 +241,10 @@ backends:
 func TestValidate_PinnedReplicasMustMatch(t *testing.T) {
 	body := `
 project: p
+compose: docker-compose.yml
 hosts: { a: { ssh: u@h, gpus: [0,1] } }
 backends:
-  b: { image_tag: t, replicas: 3, placement: { vram_min: 1GiB, gpu: [a:0, a:1] } }
+  b: { image_tag: t, service: vllm, replicas: 3, placement: { vram_min: 1GiB, gpu: [a:0, a:1] } }
 `
 	if _, err := Load(writeTemp(t, body)); err == nil {
 		t.Fatal("expected rejection: replicas != pin count")
@@ -244,11 +254,62 @@ backends:
 func TestValidate_DuplicatePin(t *testing.T) {
 	body := `
 project: p
+compose: docker-compose.yml
 hosts: { a: { ssh: u@h, gpus: [0,1] } }
 backends:
-  b: { image_tag: t, placement: { vram_min: 1GiB, gpu: [a:0, a:0] } }
+  b: { image_tag: t, service: vllm, placement: { vram_min: 1GiB, gpu: [a:0, a:0] } }
 `
 	if _, err := Load(writeTemp(t, body)); err == nil {
 		t.Fatal("expected rejection: duplicate pin")
+	}
+}
+
+func TestValidate_RequiresComposeAndService(t *testing.T) {
+	body := `
+project: p
+hosts: { a: { ssh: u@h, gpus: [0] } }
+backends:
+  b: { image_tag: t, service: vllm, placement: { vram_min: 1GiB, gpu: auto, pool: [a] } }
+`
+	// compose missing at top level -> rejected.
+	if _, err := Load(writeTemp(t, body)); err == nil {
+		t.Fatal("expected rejection: missing compose")
+	}
+}
+
+func TestLoad_ExpandsImageTagFromEnv(t *testing.T) {
+	t.Setenv("TAG", "v1.4.2")
+	body := `
+project: p
+compose: docker-compose.yml
+hosts: { a: { ssh: u@h, gpus: [0] } }
+backends:
+  b: { image_tag: "${TAG}", service: vllm, placement: { vram_min: 1GiB, gpu: auto, pool: [a] } }
+services:
+  api: { image_tag: "app-${TAG}", service: api, host: a }
+`
+	cfg, err := Load(writeTemp(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Backends["b"].ImageTag != "v1.4.2" {
+		t.Fatalf("backend tag not expanded: %q", cfg.Backends["b"].ImageTag)
+	}
+	if cfg.Services["api"].ImageTag != "app-v1.4.2" {
+		t.Fatalf("service tag not expanded: %q", cfg.Services["api"].ImageTag)
+	}
+}
+
+func TestLoad_UnsetImageTagVarErrors(t *testing.T) {
+	t.Setenv("DOCKRAIL_UNSET_TAG_XYZ", "")
+	body := `
+project: p
+compose: docker-compose.yml
+hosts: { a: { ssh: u@h, gpus: [0] } }
+backends:
+  b: { image_tag: "${DOCKRAIL_UNSET_TAG_XYZ}", service: vllm, placement: { vram_min: 1GiB, gpu: auto, pool: [a] } }
+`
+	if _, err := Load(writeTemp(t, body)); err == nil {
+		t.Fatal("expected error for unset image_tag variable")
 	}
 }

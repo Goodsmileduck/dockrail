@@ -13,6 +13,7 @@ import (
 
 type Config struct {
 	Project   string             `yaml:"project"`
+	Compose   string             `yaml:"compose"`
 	Registry  Registry           `yaml:"registry"`
 	Scheduler Scheduler          `yaml:"scheduler"`
 	Hosts     map[string]Host    `yaml:"hosts"`
@@ -35,6 +36,7 @@ type Host struct {
 }
 
 type Backend struct {
+	Service   string    `yaml:"service"`
 	ImageTag  string    `yaml:"image_tag"`
 	Model     string    `yaml:"model"`
 	Replicas  int       `yaml:"replicas"`
@@ -87,6 +89,7 @@ type Wiring struct {
 }
 
 type Service struct {
+	Service   string    `yaml:"service"`
 	Host      string    `yaml:"host"`
 	ImageTag  string    `yaml:"image_tag"`
 	Uses      []Use     `yaml:"uses"`
@@ -106,6 +109,27 @@ type Cutover struct {
 	Warmup   bool   `yaml:"warmup"`
 }
 
+// expandTag resolves ${VAR}/$VAR references in an image tag from the process
+// environment. A referenced-but-unset (or empty) variable is an error rather
+// than a silently-empty tag that would later fail an opaque "required" check.
+func expandTag(raw string) (string, error) {
+	if !strings.Contains(raw, "$") {
+		return raw, nil
+	}
+	var missing string
+	out := os.Expand(raw, func(k string) string {
+		v, ok := os.LookupEnv(k)
+		if !ok || v == "" {
+			missing = k
+		}
+		return v
+	})
+	if missing != "" {
+		return "", fmt.Errorf("image_tag %q references unset environment variable %q", raw, missing)
+	}
+	return out, nil
+}
+
 func Load(path string) (*Config, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -116,6 +140,26 @@ func Load(path string) (*Config, error) {
 	dec.KnownFields(true)
 	if err := dec.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	// Resolve ${VAR}/$VAR in image tags from the environment (docker-compose
+	// style), so a fleet.yml committed with image_tag: "${TAG}" picks up the
+	// tag CI provides. Done before validation so safeTag/required checks see the
+	// resolved value.
+	for name, b := range cfg.Backends {
+		t, err := expandTag(b.ImageTag)
+		if err != nil {
+			return nil, fmt.Errorf("%s: backends.%s: %w", path, name, err)
+		}
+		b.ImageTag = t
+		cfg.Backends[name] = b
+	}
+	for name, s := range cfg.Services {
+		t, err := expandTag(s.ImageTag)
+		if err != nil {
+			return nil, fmt.Errorf("%s: services.%s: %w", path, name, err)
+		}
+		s.ImageTag = t
+		cfg.Services[name] = s
 	}
 	// Replicas defaults to 1 when unset (0), applied once here before validation
 	// so validate() stays side-effect-free (mirrors config.RetainContainers).
@@ -165,6 +209,11 @@ func (c *Config) validate() error {
 	if len(c.Hosts) == 0 {
 		return fmt.Errorf("at least one entry under hosts is required")
 	}
+	if len(c.Backends) > 0 || len(c.Services) > 0 {
+		if c.Compose == "" {
+			return fmt.Errorf("compose is required when backends or services are declared")
+		}
+	}
 	if !validPolicy(c.Scheduler.Policy) {
 		return fmt.Errorf("scheduler.policy must be spread|binpack|first-fit, got %q", c.Scheduler.Policy)
 	}
@@ -186,6 +235,9 @@ func (c *Config) validate() error {
 	for name, b := range c.Backends {
 		if err := validName("backends", name); err != nil {
 			return err
+		}
+		if b.Service == "" {
+			return fmt.Errorf("backends.%s: service is required", name)
 		}
 		if b.ImageTag == "" {
 			return fmt.Errorf("backends.%s: image_tag is required", name)
@@ -238,6 +290,9 @@ func (c *Config) validate() error {
 	for name, s := range c.Services {
 		if err := validName("services", name); err != nil {
 			return err
+		}
+		if s.Service == "" {
+			return fmt.Errorf("services.%s: service is required", name)
 		}
 		if s.Host == "" {
 			return fmt.Errorf("services.%s: host is required", name)

@@ -237,7 +237,7 @@ func Compute(cfg *fleet.Config, observed observe.FleetState) (Plan, error) {
 			}
 			if svcChanged || changed[u.Backend] {
 				rewire = append(rewire, Action{Kind: Rewire, Service: name, Backend: u.Backend,
-					Endpoints: endpointsOf(placements[u.Backend])})
+					Host: s.Host, Endpoints: endpointsOf(placements[u.Backend])})
 			}
 		}
 	}

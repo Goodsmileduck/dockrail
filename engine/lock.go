@@ -152,6 +152,17 @@ func acquireLockWait(ctx context.Context, conn connection.Connection, project, t
 	}
 }
 
+// AcquireFleetLock takes the fleet-scoped deploy lock on conn, keyed by
+// project, waiting up to wait (wait <= 0 fails fast). It returns a release
+// func. The fleet lock reuses the single-host deploy-lock mechanism: the caller
+// picks one designated host deterministically (e.g. the lexicographically-first
+// host) so that every concurrent `fleet apply` for the same project contends
+// for the same lock and collides. Promotion to a genuinely distributed
+// fleet lock is a later refinement (sub-spec 5).
+func AcquireFleetLock(ctx context.Context, conn connection.Connection, project string, wait time.Duration, out io.Writer) (func(), error) {
+	return acquireLockWait(ctx, conn, project, "fleet-apply", wait, out)
+}
+
 // LockStatus reports whether the deploy lock is held, with a holder
 // description when it is. The probe command always exits 0 so a Run error
 // means the connection itself failed, not "lock absent".
