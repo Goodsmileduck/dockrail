@@ -95,3 +95,68 @@ func TestPlan_Infeasible(t *testing.T) {
 		t.Fatalf("bad ScheduleError fields: %+v", se)
 	}
 }
+
+func TestPlan_BinpackConsolidates(t *testing.T) {
+	// Two 10GiB replicas, binpack: both should land on ONE 24GiB GPU (least-free
+	// that fits), leaving the other GPU empty. Anti-affinity forbids that, so
+	// binpack of a SINGLE backend still spreads — use two backends to see it.
+	cfg := &fleet.Config{
+		Scheduler: fleet.Scheduler{Policy: "binpack"},
+		Backends: map[string]fleet.Backend{
+			"a1": {ImageTag: "t", Replicas: 1, Placement: fleet.Placement{VRAMMin: "10GiB", Pool: []string{"h"}, GPU: fleet.GPUSpec{Auto: true}}},
+			"a2": {ImageTag: "t", Replicas: 1, Placement: fleet.Placement{VRAMMin: "10GiB", Pool: []string{"h"}, GPU: fleet.GPUSpec{Auto: true}}},
+		},
+	}
+	state := observe.FleetState{Hosts: []observe.HostState{
+		{Name: "h", GPUs: []observe.GPUState{gpu(0, 24576), gpu(1, 24576)}},
+	}}
+	got, err := Plan(cfg, state)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	// binpack: a1 takes gpu0; a2 (different backend, anti-affinity N/A) should
+	// also pack onto gpu0 (least-free-that-fits) rather than spread to gpu1.
+	if got["a1"][0].GPU != 0 || got["a2"][0].GPU != 0 {
+		t.Fatalf("binpack did not consolidate: a1=%+v a2=%+v", got["a1"], got["a2"])
+	}
+}
+
+func TestPlan_PerBackendPolicyOverride(t *testing.T) {
+	cfg := &fleet.Config{
+		Scheduler: fleet.Scheduler{Policy: "binpack"},
+		Backends: map[string]fleet.Backend{
+			"s1": {ImageTag: "t", Replicas: 1, Placement: fleet.Placement{VRAMMin: "10GiB", Pool: []string{"h"}, GPU: fleet.GPUSpec{Auto: true}}},
+			"s2": {ImageTag: "t", Replicas: 1, Placement: fleet.Placement{VRAMMin: "10GiB", Pool: []string{"h"}, GPU: fleet.GPUSpec{Auto: true}, Policy: "spread"}},
+		},
+	}
+	state := observe.FleetState{Hosts: []observe.HostState{
+		{Name: "h", GPUs: []observe.GPUState{gpu(0, 24576), gpu(1, 24576)}},
+	}}
+	got, err := Plan(cfg, state)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	// s1 binpacks onto gpu0. s2 overrides to spread → most-free is gpu1 (gpu0
+	// now has 14576 free, gpu1 has 24576).
+	if got["s1"][0].GPU != 0 || got["s2"][0].GPU != 1 {
+		t.Fatalf("override wrong: s1=%+v s2=%+v", got["s1"], got["s2"])
+	}
+}
+
+func TestPlan_Deterministic(t *testing.T) {
+	cfg := &fleet.Config{
+		Backends: map[string]fleet.Backend{
+			"x": {ImageTag: "t", Replicas: 2, Placement: fleet.Placement{VRAMMin: "10GiB", Pool: []string{"h"}, GPU: fleet.GPUSpec{Auto: true}}},
+		},
+	}
+	state := observe.FleetState{Hosts: []observe.HostState{
+		{Name: "h", GPUs: []observe.GPUState{gpu(0, 24576), gpu(1, 24576)}},
+	}}
+	first, _ := Plan(cfg, state)
+	for i := 0; i < 20; i++ {
+		got, _ := Plan(cfg, state)
+		if got["x"][0] != first["x"][0] || got["x"][1] != first["x"][1] {
+			t.Fatalf("non-deterministic: %+v vs %+v", got["x"], first["x"])
+		}
+	}
+}

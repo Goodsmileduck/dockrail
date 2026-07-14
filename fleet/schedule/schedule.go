@@ -12,6 +12,16 @@ import (
 	"github.com/goodsmileduck/dockrail/vram"
 )
 
+func resolvePolicy(cfg *fleet.Config, b fleet.Backend) string {
+	if b.Placement.Policy != "" {
+		return b.Placement.Policy
+	}
+	if cfg.Scheduler.Policy != "" {
+		return cfg.Scheduler.Policy
+	}
+	return "spread"
+}
+
 type Assignment struct {
 	Replica int
 	Host    string
@@ -40,7 +50,7 @@ type gpuRef struct {
 
 // Plan assigns every GPU-scheduled replica a concrete host:gpu slot.
 func Plan(cfg *fleet.Config, state observe.FleetState) (Placements, error) {
-	ledger := map[gpuRef]int{}     // available MiB per schedulable GPU
+	ledger := map[gpuRef]int{} // available MiB per schedulable GPU
 	for _, h := range state.Hosts {
 		if h.Err != "" {
 			continue
@@ -105,8 +115,9 @@ func Plan(cfg *fleet.Config, state observe.FleetState) (Placements, error) {
 		for _, h := range b.Placement.Pool {
 			pool[h] = true
 		}
+		policy := resolvePolicy(cfg, b)
 		for r := 0; r < b.Replicas; r++ {
-			ref, ok, best := selectSpread(ledger, occupied, name, pool, need)
+			ref, ok, best := selectGPU(policy, ledger, occupied, name, pool, need)
 			if !ok {
 				return nil, &ScheduleError{Backend: name, Replica: r, NeededMiB: need, BestFreeMiB: best}
 			}
@@ -117,11 +128,11 @@ func Plan(cfg *fleet.Config, state observe.FleetState) (Placements, error) {
 	return out, nil
 }
 
-// selectSpread returns the most-free candidate GPU (worst-fit) in the pool that
-// fits `need` and does not already hold a replica of `backend`. Ties break by
-// (host, index) for determinism. `best` is the largest free seen among pool
-// GPUs (for the ScheduleError shortfall) even when nothing fits.
-func selectSpread(ledger map[gpuRef]int, occupied map[gpuRef]map[string]bool, backend string, pool map[string]bool, need int) (chosen gpuRef, ok bool, best int) {
+// selectGPU picks a candidate GPU in the pool that fits `need` and does not
+// already hold a replica of `backend`, per policy. Ties (and first-fit order)
+// break by (host, index) for determinism. `best` is the largest pool-GPU free
+// seen (for the ScheduleError shortfall) even when nothing fits.
+func selectGPU(policy string, ledger map[gpuRef]int, occupied map[gpuRef]map[string]bool, backend string, pool map[string]bool, need int) (chosen gpuRef, ok bool, best int) {
 	refs := make([]gpuRef, 0, len(ledger))
 	for ref := range ledger {
 		if pool[ref.host] {
@@ -140,14 +151,24 @@ func selectSpread(ledger map[gpuRef]int, occupied map[gpuRef]map[string]bool, ba
 		if avail > bestFree {
 			bestFree = avail
 		}
-		if occupied[ref][backend] {
-			continue // anti-affinity: same backend already here
-		}
-		if avail < need {
+		if occupied[ref][backend] || avail < need {
 			continue
 		}
-		if !ok || avail > ledger[chosen] {
+		if !ok {
 			chosen, ok = ref, true
+			continue
+		}
+		switch policy {
+		case "binpack": // least-free that still fits
+			if avail < ledger[chosen] {
+				chosen = ref
+			}
+		case "first-fit": // first in (host,index) order — keep the earlier one
+			// refs is already sorted; the first match wins, so do nothing.
+		default: // spread: most-free-first
+			if avail > ledger[chosen] {
+				chosen = ref
+			}
 		}
 	}
 	if bestFree < 0 {
