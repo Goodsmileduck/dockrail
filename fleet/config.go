@@ -196,6 +196,9 @@ func (c *Config) validate() error {
 		if !validPolicy(b.Placement.Policy) {
 			return fmt.Errorf("backends.%s: placement.policy must be spread|binpack|first-fit, got %q", name, b.Placement.Policy)
 		}
+		if !b.Placement.GPU.Auto && len(b.Placement.GPU.Pins) == 0 {
+			return fmt.Errorf("backends.%s: placement.gpu must be \"auto\" or a list of pins", name)
+		}
 		if pins := b.Placement.GPU.Pins; len(pins) > 0 {
 			if b.Replicas != len(pins) {
 				return fmt.Errorf("backends.%s: replicas (%d) must equal the number of gpu pins (%d)", name, b.Replicas, len(pins))

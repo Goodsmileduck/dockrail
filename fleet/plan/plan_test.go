@@ -176,3 +176,45 @@ func TestCompute_PhaseOrdering(t *testing.T) {
 		t.Fatalf("drain phase should remove old/0: %+v", p.Phases[2])
 	}
 }
+
+func TestCompute_ErrHostBackendUnplanned(t *testing.T) {
+	// The only host is unreachable; a desired replica must NOT be re-placed —
+	// instead a warning, and no place action.
+	cfg := backendCfg(1, "v2")
+	st := observe.FleetState{Hosts: []observe.HostState{
+		{Name: "h", Err: "unreachable", GPUs: []observe.GPUState{{Index: 0, TotalMiB: 24576, FreeMiB: 24576}}},
+	}}
+	p, err := Compute(cfg, st)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	if len(actionsOf(p)) != 0 {
+		t.Fatalf("expected no actions for Err-host backend, got %+v", actionsOf(p))
+	}
+	if len(p.Warnings) == 0 {
+		t.Fatalf("expected a warning for the unreachable host")
+	}
+}
+
+func TestCompute_SteadyStateServiceNoRewire(t *testing.T) {
+	// Backend satisfied AND service satisfied -> empty plan (no rewire churn).
+	cfg := &fleet.Config{
+		Backends: map[string]fleet.Backend{
+			"llama": {ImageTag: "v2", Replicas: 1, Placement: fleet.Placement{
+				VRAMMin: "10GiB", Pool: []string{"h"}, GPU: fleet.GPUSpec{Auto: true}}},
+		},
+		Services: map[string]fleet.Service{
+			"chat": {Host: "h", ImageTag: "s1",
+				Uses: []fleet.Use{{Backend: "llama", Wiring: fleet.Wiring{Strategy: "nginx-upstream"}}}},
+		},
+	}
+	svc := observe.Container{Name: "chat", Image: "reg/chat:s1", Labels: map[string]string{
+		observe.LabelManaged: "true", observe.LabelService: "chat"}}
+	st := observe.FleetState{Hosts: []observe.HostState{
+		hostWith("h", map[int]int{0: 12288}, []observe.Container{rep("llama", 0, 0, "reg/llama:v2"), svc}),
+	}}
+	p, _ := Compute(cfg, st)
+	if len(actionsOf(p)) != 0 {
+		t.Fatalf("steady state should emit no actions (incl no rewire), got %+v", actionsOf(p))
+	}
+}

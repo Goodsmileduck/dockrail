@@ -159,7 +159,7 @@ func TestValidate_ReplicasDefaultsToOne(t *testing.T) {
 	body := `
 project: p
 hosts: { a: { ssh: u@h, gpus: [0] } }
-backends: { b: { image_tag: t } }
+backends: { b: { image_tag: t, placement: { vram_min: 1GiB, gpu: auto, pool: [a] } } }
 `
 	cfg, err := Load(writeTemp(t, body))
 	if err != nil {

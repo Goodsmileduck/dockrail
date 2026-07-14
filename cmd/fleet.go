@@ -101,18 +101,21 @@ func runFleetPlan(ctx context.Context, cfg *fleet.Config, factory observe.ConnFa
 		enc.SetIndent("", "  ")
 		return enc.Encode(p)
 	}
+	for _, w := range p.Warnings {
+		fmt.Fprintf(out, "warning: %s\n", w)
+	}
 	empty := true
-	for _, ph := range p.Phases {
+	for i, ph := range p.Phases {
 		if len(ph.Actions) == 0 {
 			continue
 		}
 		empty = false
-		fmt.Fprintf(out, "Phase — %s\n", ph.Name)
+		fmt.Fprintf(out, "Phase %d — %s\n", i+1, ph.Name)
 		for _, a := range ph.Actions {
 			fmt.Fprintf(out, "  %s\n", a.String())
 		}
 	}
-	if empty {
+	if empty && len(p.Warnings) == 0 {
 		fmt.Fprintln(out, "already converged; no actions")
 	}
 	return nil
