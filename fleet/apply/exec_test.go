@@ -51,6 +51,57 @@ func TestPlace_RejectsUnsafeTag(t *testing.T) {
 	}
 }
 
+func TestDeployService_WritesOverrideAndComposeUp(t *testing.T) {
+	f := connection.NewFake()
+	cfg := &fleet.Config{
+		Compose: "docker-compose.yml",
+		Services: map[string]fleet.Service{
+			"chat": {Service: "chat-api", Host: "h", ImageTag: "v3",
+				Readiness: fleet.Readiness{Type: "tcp", Port: 8080}},
+		},
+	}
+	x := &actionExec{cfg: cfg, conn: f, out: &bytes.Buffer{}}
+	if err := x.deployService(context.Background(), plan.Action{Kind: plan.DeployService, Service: "chat", Host: "h", Tag: "v3"}); err != nil {
+		t.Fatalf("deployService: %v", err)
+	}
+	var sawWrite, sawUp bool
+	for _, c := range f.Commands {
+		if strings.Contains(c, "DOCKRAILEOF") && strings.Contains(c, "chat") {
+			sawWrite = true
+		}
+		if strings.Contains(c, "docker compose") && strings.Contains(c, "up -d") && strings.Contains(c, "chat") {
+			sawUp = true
+		}
+	}
+	if !sawWrite || !sawUp {
+		t.Fatalf("want override write + compose up for chat; commands: %v", f.Commands)
+	}
+}
+
+func TestDeployService_RejectsUnsafeTag(t *testing.T) {
+	f := connection.NewFake()
+	cfg := &fleet.Config{
+		Compose:  "docker-compose.yml",
+		Services: map[string]fleet.Service{"chat": {Service: "chat-api", Host: "h"}},
+	}
+	x := &actionExec{cfg: cfg, conn: f, out: &bytes.Buffer{}}
+	if err := x.deployService(context.Background(), plan.Action{Kind: plan.DeployService, Service: "chat", Host: "h", Tag: "v3; rm -rf /"}); err == nil {
+		t.Fatal("expected unsafe-tag rejection")
+	}
+}
+
+func TestRewire_DefaultsToLogWiring(t *testing.T) {
+	var buf bytes.Buffer
+	x := &actionExec{cfg: &fleet.Config{}, conn: connection.NewFake(), out: &buf}
+	err := x.rewire(context.Background(), plan.Action{Kind: plan.Rewire, Service: "chat", Backend: "llama", Endpoints: []string{"h1", "h2"}})
+	if err != nil {
+		t.Fatalf("rewire: %v", err)
+	}
+	if !strings.Contains(buf.String(), "chat") || !strings.Contains(buf.String(), "llama") {
+		t.Fatalf("expected a wiring log line naming service+backend, got %q", buf.String())
+	}
+}
+
 func TestRemove_DockerRm(t *testing.T) {
 	x, f := execFixture()
 	if err := x.remove(context.Background(), plan.Action{Kind: plan.RemoveReplica, Backend: "llama", Replica: 1, Host: "h", GPU: 0}); err != nil {
