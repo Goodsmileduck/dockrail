@@ -59,6 +59,7 @@ services:
 `
 
 func TestLoad_GoodFleet(t *testing.T) {
+	t.Setenv("TAG", "app-v1.0.0") // chat-api uses image_tag: "${TAG}" (CI provides it)
 	cfg, err := Load(writeTemp(t, goodFleet))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -273,5 +274,42 @@ backends:
 	// compose missing at top level -> rejected.
 	if _, err := Load(writeTemp(t, body)); err == nil {
 		t.Fatal("expected rejection: missing compose")
+	}
+}
+
+func TestLoad_ExpandsImageTagFromEnv(t *testing.T) {
+	t.Setenv("TAG", "v1.4.2")
+	body := `
+project: p
+compose: docker-compose.yml
+hosts: { a: { ssh: u@h, gpus: [0] } }
+backends:
+  b: { image_tag: "${TAG}", service: vllm, placement: { vram_min: 1GiB, gpu: auto, pool: [a] } }
+services:
+  api: { image_tag: "app-${TAG}", service: api, host: a }
+`
+	cfg, err := Load(writeTemp(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Backends["b"].ImageTag != "v1.4.2" {
+		t.Fatalf("backend tag not expanded: %q", cfg.Backends["b"].ImageTag)
+	}
+	if cfg.Services["api"].ImageTag != "app-v1.4.2" {
+		t.Fatalf("service tag not expanded: %q", cfg.Services["api"].ImageTag)
+	}
+}
+
+func TestLoad_UnsetImageTagVarErrors(t *testing.T) {
+	t.Setenv("DOCKRAIL_UNSET_TAG_XYZ", "")
+	body := `
+project: p
+compose: docker-compose.yml
+hosts: { a: { ssh: u@h, gpus: [0] } }
+backends:
+  b: { image_tag: "${DOCKRAIL_UNSET_TAG_XYZ}", service: vllm, placement: { vram_min: 1GiB, gpu: auto, pool: [a] } }
+`
+	if _, err := Load(writeTemp(t, body)); err == nil {
+		t.Fatal("expected error for unset image_tag variable")
 	}
 }

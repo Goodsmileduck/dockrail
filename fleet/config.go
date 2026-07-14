@@ -109,6 +109,27 @@ type Cutover struct {
 	Warmup   bool   `yaml:"warmup"`
 }
 
+// expandTag resolves ${VAR}/$VAR references in an image tag from the process
+// environment. A referenced-but-unset (or empty) variable is an error rather
+// than a silently-empty tag that would later fail an opaque "required" check.
+func expandTag(raw string) (string, error) {
+	if !strings.Contains(raw, "$") {
+		return raw, nil
+	}
+	var missing string
+	out := os.Expand(raw, func(k string) string {
+		v, ok := os.LookupEnv(k)
+		if !ok || v == "" {
+			missing = k
+		}
+		return v
+	})
+	if missing != "" {
+		return "", fmt.Errorf("image_tag %q references unset environment variable %q", raw, missing)
+	}
+	return out, nil
+}
+
 func Load(path string) (*Config, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -119,6 +140,26 @@ func Load(path string) (*Config, error) {
 	dec.KnownFields(true)
 	if err := dec.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	// Resolve ${VAR}/$VAR in image tags from the environment (docker-compose
+	// style), so a fleet.yml committed with image_tag: "${TAG}" picks up the
+	// tag CI provides. Done before validation so safeTag/required checks see the
+	// resolved value.
+	for name, b := range cfg.Backends {
+		t, err := expandTag(b.ImageTag)
+		if err != nil {
+			return nil, fmt.Errorf("%s: backends.%s: %w", path, name, err)
+		}
+		b.ImageTag = t
+		cfg.Backends[name] = b
+	}
+	for name, s := range cfg.Services {
+		t, err := expandTag(s.ImageTag)
+		if err != nil {
+			return nil, fmt.Errorf("%s: services.%s: %w", path, name, err)
+		}
+		s.ImageTag = t
+		cfg.Services[name] = s
 	}
 	// Replicas defaults to 1 when unset (0), applied once here before validation
 	// so validate() stays side-effect-free (mirrors config.RetainContainers).
