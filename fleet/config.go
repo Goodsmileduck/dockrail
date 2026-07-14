@@ -121,7 +121,11 @@ func Load(path string) (*Config, error) {
 	// so validate() stays side-effect-free (mirrors config.RetainContainers).
 	for name, b := range cfg.Backends {
 		if b.Replicas == 0 {
-			b.Replicas = 1
+			if n := len(b.Placement.GPU.Pins); n > 0 {
+				b.Replicas = n // pins define the replica count
+			} else {
+				b.Replicas = 1
+			}
 			cfg.Backends[name] = b
 		}
 	}
@@ -183,6 +187,18 @@ func (c *Config) validate() error {
 		}
 		if !validPolicy(b.Placement.Policy) {
 			return fmt.Errorf("backends.%s: placement.policy must be spread|binpack|first-fit, got %q", name, b.Placement.Policy)
+		}
+		if pins := b.Placement.GPU.Pins; len(pins) > 0 {
+			if b.Replicas != len(pins) {
+				return fmt.Errorf("backends.%s: replicas (%d) must equal the number of gpu pins (%d)", name, b.Replicas, len(pins))
+			}
+			seen := make(map[string]bool, len(pins))
+			for _, pin := range pins {
+				if seen[pin] {
+					return fmt.Errorf("backends.%s: duplicate gpu pin %q", name, pin)
+				}
+				seen[pin] = true
+			}
 		}
 		p := b.Placement
 		if p.GPU.Auto {

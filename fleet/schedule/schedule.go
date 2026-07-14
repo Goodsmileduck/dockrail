@@ -30,15 +30,22 @@ type Assignment struct {
 
 type Placements map[string][]Assignment
 
-// ScheduleError reports the first replica that could not be placed.
+// ScheduleError reports the first replica that could not be placed. When
+// AntiAffinity is true the blocker was same-backend anti-affinity (a fitting
+// GPU existed but already hosts a replica of this backend), not a VRAM shortfall.
 type ScheduleError struct {
-	Backend     string
-	Replica     int
-	NeededMiB   int
-	BestFreeMiB int
+	Backend      string
+	Replica      int
+	NeededMiB    int
+	BestFreeMiB  int
+	AntiAffinity bool
 }
 
 func (e *ScheduleError) Error() string {
+	if e.AntiAffinity {
+		return fmt.Sprintf("backend %q replica %d: no free GPU — every fitting GPU already hosts a replica of this backend (anti-affinity)",
+			e.Backend, e.Replica)
+	}
 	return fmt.Sprintf("backend %q replica %d: no GPU with enough free VRAM (need %d MiB, best free %d MiB)",
 		e.Backend, e.Replica, e.NeededMiB, e.BestFreeMiB)
 }
@@ -117,9 +124,9 @@ func Plan(cfg *fleet.Config, state observe.FleetState) (Placements, error) {
 		}
 		policy := resolvePolicy(cfg, b)
 		for r := 0; r < b.Replicas; r++ {
-			ref, ok, best := selectGPU(policy, ledger, occupied, name, pool, need)
+			ref, ok, best, aff := selectGPU(policy, ledger, occupied, name, pool, need)
 			if !ok {
-				return nil, &ScheduleError{Backend: name, Replica: r, NeededMiB: need, BestFreeMiB: best}
+				return nil, &ScheduleError{Backend: name, Replica: r, NeededMiB: need, BestFreeMiB: best, AntiAffinity: aff}
 			}
 			place(ref, name, need)
 			out[name] = append(out[name], Assignment{Replica: r, Host: ref.host, GPU: ref.idx})
@@ -132,7 +139,7 @@ func Plan(cfg *fleet.Config, state observe.FleetState) (Placements, error) {
 // already hold a replica of `backend`, per policy. Ties (and first-fit order)
 // break by (host, index) for determinism. `best` is the largest pool-GPU free
 // seen (for the ScheduleError shortfall) even when nothing fits.
-func selectGPU(policy string, ledger map[gpuRef]int, occupied map[gpuRef]map[string]bool, backend string, pool map[string]bool, need int) (chosen gpuRef, ok bool, best int) {
+func selectGPU(policy string, ledger map[gpuRef]int, occupied map[gpuRef]map[string]bool, backend string, pool map[string]bool, need int) (chosen gpuRef, ok bool, best int, affinityBlocked bool) {
 	refs := make([]gpuRef, 0, len(ledger))
 	for ref := range ledger {
 		if pool[ref.host] {
@@ -151,7 +158,11 @@ func selectGPU(policy string, ledger map[gpuRef]int, occupied map[gpuRef]map[str
 		if avail > bestFree {
 			bestFree = avail
 		}
-		if occupied[ref][backend] || avail < need {
+		if avail < need {
+			continue
+		}
+		if occupied[ref][backend] {
+			affinityBlocked = true // would fit, but same backend already here
 			continue
 		}
 		if !ok {
@@ -174,5 +185,5 @@ func selectGPU(policy string, ledger map[gpuRef]int, occupied map[gpuRef]map[str
 	if bestFree < 0 {
 		bestFree = 0
 	}
-	return chosen, ok, bestFree
+	return chosen, ok, bestFree, affinityBlocked
 }

@@ -160,3 +160,46 @@ func TestPlan_Deterministic(t *testing.T) {
 		}
 	}
 }
+
+func TestPlan_AntiAffinityExhausted(t *testing.T) {
+	// One GPU, one backend wanting 2 replicas: replica 0 takes it, replica 1
+	// fits by VRAM but is blocked by anti-affinity -> AntiAffinity ScheduleError.
+	cfg := &fleet.Config{
+		Backends: map[string]fleet.Backend{
+			"b": {ImageTag: "t", Replicas: 2, Placement: fleet.Placement{
+				VRAMMin: "10GiB", Pool: []string{"h"}, GPU: fleet.GPUSpec{Auto: true},
+			}},
+		},
+	}
+	state := observe.FleetState{Hosts: []observe.HostState{
+		{Name: "h", GPUs: []observe.GPUState{gpu(0, 24576)}},
+	}}
+	_, err := Plan(cfg, state)
+	var se *ScheduleError
+	if !errors.As(err, &se) || !se.AntiAffinity {
+		t.Fatalf("want AntiAffinity ScheduleError, got %v", err)
+	}
+}
+
+func TestPlan_FirstFit(t *testing.T) {
+	// first-fit picks the first (host,index) that fits even when a later GPU has
+	// more free VRAM (which is what spread would pick), proving the policy path.
+	cfg := &fleet.Config{
+		Scheduler: fleet.Scheduler{Policy: "first-fit"},
+		Backends: map[string]fleet.Backend{
+			"b": {ImageTag: "t", Replicas: 1, Placement: fleet.Placement{
+				VRAMMin: "10GiB", Pool: []string{"h"}, GPU: fleet.GPUSpec{Auto: true},
+			}},
+		},
+	}
+	state := observe.FleetState{Hosts: []observe.HostState{
+		{Name: "h", GPUs: []observe.GPUState{gpu(0, 20000), gpu(1, 24576)}},
+	}}
+	got, err := Plan(cfg, state)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if got["b"][0].GPU != 0 {
+		t.Fatalf("first-fit should pick gpu0, got %+v", got["b"])
+	}
+}

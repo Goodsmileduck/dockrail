@@ -212,3 +212,43 @@ backends:
 		}
 	}
 }
+
+func TestLoad_PinnedReplicasDefaultToPinCount(t *testing.T) {
+	body := `
+project: p
+hosts: { a: { ssh: u@h, gpus: [0,1] } }
+backends:
+  b: { image_tag: t, placement: { vram_min: 1GiB, gpu: [a:0, a:1] } }
+`
+	cfg, err := Load(writeTemp(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Backends["b"].Replicas != 2 {
+		t.Fatalf("pinned replicas should default to pin count 2, got %d", cfg.Backends["b"].Replicas)
+	}
+}
+
+func TestValidate_PinnedReplicasMustMatch(t *testing.T) {
+	body := `
+project: p
+hosts: { a: { ssh: u@h, gpus: [0,1] } }
+backends:
+  b: { image_tag: t, replicas: 3, placement: { vram_min: 1GiB, gpu: [a:0, a:1] } }
+`
+	if _, err := Load(writeTemp(t, body)); err == nil {
+		t.Fatal("expected rejection: replicas != pin count")
+	}
+}
+
+func TestValidate_DuplicatePin(t *testing.T) {
+	body := `
+project: p
+hosts: { a: { ssh: u@h, gpus: [0,1] } }
+backends:
+  b: { image_tag: t, placement: { vram_min: 1GiB, gpu: [a:0, a:0] } }
+`
+	if _, err := Load(writeTemp(t, body)); err == nil {
+		t.Fatal("expected rejection: duplicate pin")
+	}
+}
