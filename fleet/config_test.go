@@ -169,3 +169,86 @@ backends: { b: { image_tag: t } }
 		t.Fatalf("replicas default = %d, want 1", cfg.Backends["b"].Replicas)
 	}
 }
+
+func TestLoad_SchedulerPolicy(t *testing.T) {
+	body := `
+project: p
+scheduler: { policy: binpack }
+hosts: { a: { ssh: u@h, gpus: [0] } }
+backends:
+  b:
+    image_tag: t
+    placement: { vram_min: 1GiB, gpu: auto, pool: [a], policy: spread }
+`
+	cfg, err := Load(writeTemp(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Scheduler.Policy != "binpack" {
+		t.Fatalf("scheduler.policy = %q", cfg.Scheduler.Policy)
+	}
+	if cfg.Backends["b"].Placement.Policy != "spread" {
+		t.Fatalf("backend policy = %q", cfg.Backends["b"].Placement.Policy)
+	}
+}
+
+func TestValidate_RejectsBadPolicy(t *testing.T) {
+	cases := []string{
+		`
+project: p
+scheduler: { policy: bogus }
+hosts: { a: { ssh: u@h, gpus: [0] } }
+`,
+		`
+project: p
+hosts: { a: { ssh: u@h, gpus: [0] } }
+backends:
+  b: { image_tag: t, placement: { vram_min: 1GiB, gpu: auto, pool: [a], policy: nope } }
+`,
+	}
+	for i, body := range cases {
+		if _, err := Load(writeTemp(t, body)); err == nil {
+			t.Fatalf("case %d: expected policy rejection", i)
+		}
+	}
+}
+
+func TestLoad_PinnedReplicasDefaultToPinCount(t *testing.T) {
+	body := `
+project: p
+hosts: { a: { ssh: u@h, gpus: [0,1] } }
+backends:
+  b: { image_tag: t, placement: { vram_min: 1GiB, gpu: [a:0, a:1] } }
+`
+	cfg, err := Load(writeTemp(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Backends["b"].Replicas != 2 {
+		t.Fatalf("pinned replicas should default to pin count 2, got %d", cfg.Backends["b"].Replicas)
+	}
+}
+
+func TestValidate_PinnedReplicasMustMatch(t *testing.T) {
+	body := `
+project: p
+hosts: { a: { ssh: u@h, gpus: [0,1] } }
+backends:
+  b: { image_tag: t, replicas: 3, placement: { vram_min: 1GiB, gpu: [a:0, a:1] } }
+`
+	if _, err := Load(writeTemp(t, body)); err == nil {
+		t.Fatal("expected rejection: replicas != pin count")
+	}
+}
+
+func TestValidate_DuplicatePin(t *testing.T) {
+	body := `
+project: p
+hosts: { a: { ssh: u@h, gpus: [0,1] } }
+backends:
+  b: { image_tag: t, placement: { vram_min: 1GiB, gpu: [a:0, a:0] } }
+`
+	if _, err := Load(writeTemp(t, body)); err == nil {
+		t.Fatal("expected rejection: duplicate pin")
+	}
+}
