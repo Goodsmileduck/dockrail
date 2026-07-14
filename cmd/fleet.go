@@ -5,7 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"sort"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -87,15 +88,10 @@ func newFleetCmd() *cobra.Command {
 // firstHost returns the lexicographically-first host name, the deterministic
 // holder of the fleet lock so concurrent appliers contend for the same lock.
 func firstHost(cfg *fleet.Config) string {
-	names := make([]string, 0, len(cfg.Hosts))
-	for n := range cfg.Hosts {
-		names = append(names, n)
+	for _, n := range slices.Sorted(maps.Keys(cfg.Hosts)) {
+		return n
 	}
-	sort.Strings(names)
-	if len(names) == 0 {
-		return ""
-	}
-	return names[0]
+	return ""
 }
 
 // runFleetApply observes the fleet, then applies the plan under a fleet lock.

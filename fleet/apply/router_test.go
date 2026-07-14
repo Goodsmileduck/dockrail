@@ -48,14 +48,14 @@ func TestRouter_RoutesReplicaByActionHost(t *testing.T) {
 	}
 }
 
-func TestRouter_RewireRoutesToServiceHost(t *testing.T) {
+func TestRouter_RewireRoutesByHost(t *testing.T) {
 	r, fakes := routerFixture()
-	// A Rewire action carries no Host; it must route to the service's host (h2).
-	if err := r.rewire(context.Background(), plan.Action{Kind: plan.Rewire, Service: "chat", Backend: "llama", Endpoints: []string{"h1"}}); err != nil {
+	// The Planner stamps the service host onto Rewire; the router routes by it.
+	if err := r.rewire(context.Background(), plan.Action{Kind: plan.Rewire, Service: "chat", Backend: "llama", Host: "h2", Endpoints: []string{"h1"}}); err != nil {
 		t.Fatalf("rewire: %v", err)
 	}
 	if _, ok := fakes["h2"]; !ok {
-		t.Fatalf("expected rewire to build a connection for the service host h2; built: %v", keys(fakes))
+		t.Fatalf("expected rewire to build a connection for the stamped host h2; built: %v", keys(fakes))
 	}
 }
 

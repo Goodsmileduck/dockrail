@@ -139,7 +139,7 @@ func TestCompute_ServiceDeployAndRewire(t *testing.T) {
 	if deploy == nil || deploy.Service != "chat" || deploy.Host != "h" || deploy.Tag != "s1" {
 		t.Fatalf("service deploy wrong: %+v", deploy)
 	}
-	if rewire == nil || rewire.Service != "chat" || rewire.Backend != "llama" || len(rewire.Endpoints) != 1 || rewire.Endpoints[0] != "h" {
+	if rewire == nil || rewire.Service != "chat" || rewire.Backend != "llama" || rewire.Host != "h" || len(rewire.Endpoints) != 1 || rewire.Endpoints[0] != "h" {
 		t.Fatalf("rewire wrong: %+v", rewire)
 	}
 }

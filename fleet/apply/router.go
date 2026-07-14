@@ -32,39 +32,27 @@ func newHostRouter(cfg *fleet.Config, factory ConnFactory, out io.Writer) *hostR
 	return &hostRouter{cfg: cfg, factory: factory, out: out, execs: map[string]*actionExec{}}
 }
 
-// hostFor resolves the host an action executes on. Replica and service actions
-// carry Host; a Rewire does not, so it routes to the service's configured host
-// (where the proxy/env-list lives).
-func (r *hostRouter) hostFor(a plan.Action) string {
-	if a.Host != "" {
-		return a.Host
-	}
-	if s, ok := r.cfg.Services[a.Service]; ok {
-		return s.Host
-	}
-	return ""
-}
-
 // execFor returns the (cached) executor bound to the action's host, opening the
-// connection on first use.
+// connection on first use. Every action carries its Host (the Planner stamps it,
+// including Rewire's service host), so the router does not special-case kinds.
 func (r *hostRouter) execFor(a plan.Action) (*actionExec, error) {
-	host := r.hostFor(a)
-	if host == "" {
-		return nil, fmt.Errorf("router: action %s has no resolvable host", a.Kind)
+	if a.Host == "" {
+		return nil, fmt.Errorf("router: action %s has no host", a.Kind)
 	}
-	if x, ok := r.execs[host]; ok {
+	if x, ok := r.execs[a.Host]; ok {
 		return x, nil
 	}
-	h, ok := r.cfg.Hosts[host]
+	h, ok := r.cfg.Hosts[a.Host]
 	if !ok {
-		return nil, fmt.Errorf("router: unknown host %q", host)
+		return nil, fmt.Errorf("router: unknown host %q", a.Host)
 	}
-	conn, err := r.factory(host, h)
+	conn, err := r.factory(a.Host, h)
 	if err != nil {
-		return nil, fmt.Errorf("router: connect %q: %w", host, err)
+		return nil, fmt.Errorf("router: connect %q: %w", a.Host, err)
 	}
-	x := &actionExec{cfg: r.cfg, conn: conn, out: r.out, wiring: LogWiring{Out: r.out}}
-	r.execs[host] = x
+	// wiring is left nil; actionExec.rewire lazily defaults it to LogWiring.
+	x := &actionExec{cfg: r.cfg, conn: conn, out: r.out}
+	r.execs[a.Host] = x
 	return x, nil
 }
 

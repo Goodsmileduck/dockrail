@@ -71,14 +71,19 @@ func (x *actionExec) place(ctx context.Context, a plan.Action) error {
 		return fmt.Errorf("place %s: write override: %w", name, err)
 	}
 	x.logf("place %s on %s:%d (%s)", name, a.Host, a.GPU, a.Tag)
-	// Both files: the base supplies top-level networks/volumes (which `extends`
-	// does NOT copy), the override adds the per-replica service. `--no-deps`
-	// starts only this replica, not the template service or its deps.
-	up := fmt.Sprintf("TAG=%s docker compose -f %s -f %s up -d --no-deps %s", a.Tag, x.cfg.Compose, ov, name)
-	if _, err := x.conn.Run(ctx, up); err != nil {
+	if err := x.composeUp(ctx, a.Tag, ov, name); err != nil {
 		return fmt.Errorf("place %s: compose up: %w", name, err)
 	}
-	return x.probe(ctx, b, name)
+	return x.probe(ctx, b.Readiness, b.Model, name)
+}
+
+// composeUp launches (or recreates) a single generated service. Both -f files
+// are required: the base supplies top-level networks/volumes that `extends`
+// does not copy; `--no-deps` starts only the target, not the template or deps.
+func (x *actionExec) composeUp(ctx context.Context, tag, override, target string) error {
+	up := fmt.Sprintf("TAG=%s docker compose -f %s -f %s up -d --no-deps %s", tag, x.cfg.Compose, override, target)
+	_, err := x.conn.Run(ctx, up)
+	return err
 }
 
 // update recreates the replica with the new tag. compose up -d recreates the
@@ -98,19 +103,10 @@ func (x *actionExec) deployService(ctx context.Context, a plan.Action) error {
 		return fmt.Errorf("deploy %s: write override: %w", a.Service, err)
 	}
 	x.logf("deploy service %s on %s (%s)", a.Service, a.Host, a.Tag)
-	// Both files: base supplies top-level networks/volumes, override adds the
-	// service definition. See place() for why `extends` alone is insufficient.
-	up := fmt.Sprintf("TAG=%s docker compose -f %s -f %s up -d --no-deps %s", a.Tag, x.cfg.Compose, ov, a.Service)
-	if _, err := x.conn.Run(ctx, up); err != nil {
+	if err := x.composeUp(ctx, a.Tag, ov, a.Service); err != nil {
 		return fmt.Errorf("deploy %s: compose up: %w", a.Service, err)
 	}
-	prober, err := readiness.New(config.Readiness{
-		Type: s.Readiness.Type, Path: s.Readiness.Path, Port: s.Readiness.Port, Timeout: s.Readiness.Timeout,
-	}, "")
-	if err != nil {
-		return fmt.Errorf("%s: readiness config: %w", a.Service, err)
-	}
-	return prober.Probe(ctx, x.conn)
+	return x.probe(ctx, s.Readiness, "", a.Service)
 }
 
 func (x *actionExec) updateService(ctx context.Context, a plan.Action) error {
@@ -138,10 +134,12 @@ func (x *actionExec) remove(ctx context.Context, a plan.Action) error {
 	return nil
 }
 
-func (x *actionExec) probe(ctx context.Context, b fleet.Backend, who string) error {
+// probe runs the readiness strategy for a placed replica or deployed service. A
+// probe failure keeps the container for forensics (it is not torn down).
+func (x *actionExec) probe(ctx context.Context, r fleet.Readiness, model, who string) error {
 	prober, err := readiness.New(config.Readiness{
-		Type: b.Readiness.Type, Path: b.Readiness.Path, Port: b.Readiness.Port, Timeout: b.Readiness.Timeout,
-	}, b.Model)
+		Type: r.Type, Path: r.Path, Port: r.Port, Timeout: r.Timeout,
+	}, model)
 	if err != nil {
 		return fmt.Errorf("%s: readiness config: %w", who, err)
 	}
