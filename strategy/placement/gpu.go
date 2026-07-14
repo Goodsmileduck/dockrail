@@ -9,13 +9,12 @@ import (
 
 	"github.com/goodsmileduck/dockrail/config"
 	"github.com/goodsmileduck/dockrail/connection"
+	"github.com/goodsmileduck/dockrail/vram"
 )
 
 // ErrNoFreeGPU signals that no GPU in the pool has enough free VRAM for a
 // second model copy. The engine interprets it via on_no_free_gpu.
 var ErrNoFreeGPU = errors.New("no free GPU with sufficient VRAM")
-
-const vramSafetyFactor = 1.2 // reserve 20% for KV-cache growth under load
 
 type GPU struct {
 	pool    map[int]bool
@@ -23,7 +22,7 @@ type GPU struct {
 }
 
 func newGPU(p config.Placement) (*GPU, error) {
-	need, err := parseMiB(p.VRAMMin)
+	need, err := vram.ParseMiB(p.VRAMMin)
 	if err != nil {
 		return nil, err
 	}
@@ -31,7 +30,7 @@ func newGPU(p config.Placement) (*GPU, error) {
 	for _, idx := range p.Pool {
 		pool[idx] = true
 	}
-	return &GPU{pool: pool, needMiB: int(float64(need) * vramSafetyFactor)}, nil
+	return &GPU{pool: pool, needMiB: int(float64(need) * vram.SafetyFactor)}, nil
 }
 
 // Pick returns the index of a pool GPU with enough free VRAM, or ErrNoFreeGPU.

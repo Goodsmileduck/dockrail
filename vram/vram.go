@@ -1,4 +1,6 @@
-package placement
+// Package vram holds VRAM-size parsing and the shared GPU headroom factor,
+// used by both the deploy-time placement strategy and the fleet scheduler.
+package vram
 
 import (
 	"fmt"
@@ -6,9 +8,14 @@ import (
 	"strings"
 )
 
-// parseMiB converts a VRAM size string to integer mebibytes. Accepts GiB/Gi,
+// SafetyFactor reserves headroom over a model's stated VRAM need for KV-cache
+// growth under load (20%). Multiply a parsed vram_min by this before comparing
+// against free VRAM.
+const SafetyFactor = 1.2
+
+// ParseMiB converts a VRAM size string to integer mebibytes. Accepts GiB/Gi,
 // MiB/Mi, and a bare number (treated as MiB, matching nvidia-smi's unit).
-func parseMiB(s string) (int, error) {
+func ParseMiB(s string) (int, error) {
 	s = strings.TrimSpace(s)
 	lower := strings.ToLower(s)
 	mult := 1

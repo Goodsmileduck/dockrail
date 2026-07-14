@@ -1,4 +1,4 @@
-package placement
+package vram
 
 import "testing"
 
@@ -11,7 +11,7 @@ func TestParseMiB(t *testing.T) {
 		"18000":    18000, // bare = MiB
 	}
 	for in, want := range cases {
-		got, err := parseMiB(in)
+		got, err := ParseMiB(in)
 		if err != nil {
 			t.Fatalf("%s: %v", in, err)
 		}
@@ -19,7 +19,7 @@ func TestParseMiB(t *testing.T) {
 			t.Errorf("%s: got %d want %d", in, got, want)
 		}
 	}
-	if _, err := parseMiB("garbage"); err == nil {
+	if _, err := ParseMiB("garbage"); err == nil {
 		t.Error("want error on garbage")
 	}
 }
