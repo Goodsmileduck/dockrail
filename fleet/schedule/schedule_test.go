@@ -249,3 +249,39 @@ func TestPlan_DelegatesToPlanDelta(t *testing.T) {
 		t.Fatalf("Plan != PlanDelta(nil): %+v vs %+v", a, b)
 	}
 }
+
+func TestPlan_MultiTenantSharesGPU(t *testing.T) {
+	// Two different backends, each 10GiB, one 24576 MiB GPU: anti-affinity is
+	// per-backend, so different backends may share the GPU (the #2 sharding case).
+	cfg := &fleet.Config{Backends: map[string]fleet.Backend{
+		"a": {ImageTag: "t", Replicas: 1, Placement: fleet.Placement{VRAMMin: "10GiB", Pool: []string{"h"}, GPU: fleet.GPUSpec{Auto: true}}},
+		"b": {ImageTag: "t", Replicas: 1, Placement: fleet.Placement{VRAMMin: "10GiB", Pool: []string{"h"}, GPU: fleet.GPUSpec{Auto: true}}},
+	}}
+	state := observe.FleetState{Hosts: []observe.HostState{{Name: "h", GPUs: []observe.GPUState{gpu(0, 24576)}}}}
+	got, err := Plan(cfg, state)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if got["a"][0].GPU != 0 || got["b"][0].GPU != 0 {
+		t.Fatalf("different backends should share gpu0: a=%+v b=%+v", got["a"], got["b"])
+	}
+}
+
+func TestPlan_PoolRestriction(t *testing.T) {
+	// h2 has equal free VRAM, but the backend's pool is only h1, so it must
+	// land on h1 regardless.
+	cfg := &fleet.Config{Backends: map[string]fleet.Backend{
+		"a": {ImageTag: "t", Replicas: 1, Placement: fleet.Placement{VRAMMin: "10GiB", Pool: []string{"h1"}, GPU: fleet.GPUSpec{Auto: true}}},
+	}}
+	state := observe.FleetState{Hosts: []observe.HostState{
+		{Name: "h1", GPUs: []observe.GPUState{gpu(0, 24576)}},
+		{Name: "h2", GPUs: []observe.GPUState{gpu(0, 24576)}},
+	}}
+	got, err := Plan(cfg, state)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if len(got["a"]) != 1 || got["a"][0].Host != "h1" {
+		t.Fatalf("must place on pool host h1, got %+v", got["a"])
+	}
+}
