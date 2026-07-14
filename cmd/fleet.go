@@ -12,6 +12,7 @@ import (
 	"github.com/goodsmileduck/dockrail/connection"
 	"github.com/goodsmileduck/dockrail/fleet"
 	"github.com/goodsmileduck/dockrail/fleet/observe"
+	"github.com/goodsmileduck/dockrail/fleet/plan"
 )
 
 func newFleetCmd() *cobra.Command {
@@ -36,6 +37,21 @@ func newFleetCmd() *cobra.Command {
 	}
 	statusCmd.Flags().Bool("json", false, "emit machine-readable JSON instead of text")
 	fleetCmd.AddCommand(statusCmd)
+	planCmd := &cobra.Command{
+		Use:   "plan",
+		Short: "show the phased action plan to converge the fleet to fleet.yml",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path, _ := cmd.Flags().GetString("fleet")
+			cfg, err := fleet.Load(path)
+			if err != nil {
+				return err
+			}
+			asJSON, _ := cmd.Flags().GetBool("json")
+			return runFleetPlan(cmd.Context(), cfg, sshFactory, cmd.OutOrStdout(), asJSON)
+		},
+	}
+	planCmd.Flags().Bool("json", false, "emit machine-readable JSON instead of text")
+	fleetCmd.AddCommand(planCmd)
 	return fleetCmd
 }
 
@@ -66,6 +82,38 @@ func runFleetStatus(ctx context.Context, cfg *fleet.Config, factory observe.Conn
 		for _, g := range h.GPUs {
 			fmt.Fprintf(out, "  gpu%d: %d/%d MiB free\n", g.Index, g.FreeMiB, g.TotalMiB)
 		}
+	}
+	return nil
+}
+
+func runFleetPlan(ctx context.Context, cfg *fleet.Config, factory observe.ConnFactory, out io.Writer, asJSON bool) error {
+	o := &observe.Observer{Cfg: cfg, Factory: factory}
+	st, err := o.Observe(ctx)
+	if err != nil {
+		return err
+	}
+	p, err := plan.Compute(cfg, st)
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		enc := json.NewEncoder(out)
+		enc.SetIndent("", "  ")
+		return enc.Encode(p)
+	}
+	empty := true
+	for _, ph := range p.Phases {
+		if len(ph.Actions) == 0 {
+			continue
+		}
+		empty = false
+		fmt.Fprintf(out, "Phase — %s\n", ph.Name)
+		for _, a := range ph.Actions {
+			fmt.Fprintf(out, "  %s\n", a.String())
+		}
+	}
+	if empty {
+		fmt.Fprintln(out, "already converged; no actions")
 	}
 	return nil
 }

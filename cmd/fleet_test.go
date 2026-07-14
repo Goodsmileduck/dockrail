@@ -46,3 +46,26 @@ func TestRunFleetStatus_JSON(t *testing.T) {
 		t.Fatalf("json output wrong:\n%s", buf.String())
 	}
 }
+
+func TestRunFleetPlan_Text(t *testing.T) {
+	cfg := &fleet.Config{Project: "p", Hosts: map[string]fleet.Host{"h": {SSH: "u@h", GPUs: []int{0, 1}}},
+		Backends: map[string]fleet.Backend{
+			"llama": {ImageTag: "v2", Replicas: 1, Placement: fleet.Placement{VRAMMin: "10GiB", Pool: []string{"h"}, GPU: fleet.GPUSpec{Auto: true}}},
+		}}
+	fake := connection.NewFake()
+	// no containers running -> plan should place llama/0.
+	fake.Stub("docker ps", "", nil)
+	fake.Stub("nvidia-smi", "0, 24576, 0, 24576\n1, 24576, 0, 24576\n", nil)
+	factory := func(name string, h fleet.Host) (connection.Connection, error) { return fake, nil }
+
+	var buf bytes.Buffer
+	if err := runFleetPlan(context.Background(), cfg, observe.ConnFactory(factory), &buf, false); err != nil {
+		t.Fatalf("runFleetPlan: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{"converge", "place", "llama/0"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("plan output missing %q:\n%s", want, out)
+		}
+	}
+}
