@@ -82,10 +82,51 @@ func (x *actionExec) place(ctx context.Context, a plan.Action) error {
 // container when its image changed; the backend's other replicas keep serving.
 func (x *actionExec) update(ctx context.Context, a plan.Action) error { return x.place(ctx, a) }
 
+func (x *actionExec) deployService(ctx context.Context, a plan.Action) error {
+	s, ok := x.cfg.Services[a.Service]
+	if !ok {
+		return fmt.Errorf("deploy: unknown service %q", a.Service)
+	}
+	if a.Tag != "" && !safeTag.MatchString(a.Tag) {
+		return fmt.Errorf("deploy %s: unsafe tag %q", a.Service, a.Tag)
+	}
+	ov := x.overridePath(a.Service)
+	if err := x.writeFile(ctx, ov, serviceOverride(x.baseName(), s.Service, a.Service)); err != nil {
+		return fmt.Errorf("deploy %s: write override: %w", a.Service, err)
+	}
+	x.logf("deploy service %s on %s (%s)", a.Service, a.Host, a.Tag)
+	up := fmt.Sprintf("TAG=%s docker compose -f %s up -d --no-deps %s", a.Tag, ov, a.Service)
+	if _, err := x.conn.Run(ctx, up); err != nil {
+		return fmt.Errorf("deploy %s: compose up: %w", a.Service, err)
+	}
+	prober, err := readiness.New(config.Readiness{
+		Type: s.Readiness.Type, Path: s.Readiness.Path, Port: s.Readiness.Port, Timeout: s.Readiness.Timeout,
+	}, "")
+	if err != nil {
+		return fmt.Errorf("%s: readiness config: %w", a.Service, err)
+	}
+	return prober.Probe(ctx, x.conn)
+}
+
+func (x *actionExec) updateService(ctx context.Context, a plan.Action) error {
+	return x.deployService(ctx, a)
+}
+
+func (x *actionExec) rewire(ctx context.Context, a plan.Action) error {
+	eps := make([]Endpoint, 0, len(a.Endpoints))
+	for _, h := range a.Endpoints {
+		eps = append(eps, Endpoint{Host: h}) // port derivation = sub-spec 5
+	}
+	if x.wiring == nil {
+		x.wiring = LogWiring{Out: x.out}
+	}
+	return x.wiring.Apply(ctx, a.Service, a.Backend, eps)
+}
+
 func (x *actionExec) remove(ctx context.Context, a plan.Action) error {
 	name := fmt.Sprintf("%s-%d", a.Backend, a.Replica)
 	x.logf("remove %s on %s:%d", name, a.Host, a.GPU)
-	// Graceful: stop then remove the single container by its name.
+	// Force-remove the single container by its name (docker rm -f stops it first).
 	if _, err := x.conn.Run(ctx, fmt.Sprintf("docker rm -f %s", name)); err != nil {
 		return fmt.Errorf("remove %s: %w", name, err)
 	}
