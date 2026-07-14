@@ -218,3 +218,86 @@ func TestCompute_SteadyStateServiceNoRewire(t *testing.T) {
 		t.Fatalf("steady state should emit no actions (incl no rewire), got %+v", actionsOf(p))
 	}
 }
+
+func TestCompute_UpdateService(t *testing.T) {
+	cfg := &fleet.Config{
+		Backends: map[string]fleet.Backend{
+			"llama": {ImageTag: "v2", Replicas: 1, Placement: fleet.Placement{VRAMMin: "10GiB", Pool: []string{"h"}, GPU: fleet.GPUSpec{Auto: true}}},
+		},
+		Services: map[string]fleet.Service{
+			"chat": {Host: "h", ImageTag: "s2", Uses: []fleet.Use{{Backend: "llama", Wiring: fleet.Wiring{Strategy: "nginx-upstream"}}}},
+		},
+	}
+	// backend satisfied (v2); service present at s1, desired s2 -> UpdateService.
+	svc := observe.Container{Name: "chat", Image: "reg/chat:s1", Labels: map[string]string{
+		observe.LabelManaged: "true", observe.LabelService: "chat"}}
+	st := observe.FleetState{Hosts: []observe.HostState{
+		hostWith("h", map[int]int{0: 12288}, []observe.Container{rep("llama", 0, 0, "reg/llama:v2"), svc}),
+	}}
+	p, err := Compute(cfg, st)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	var upd *Action
+	for _, a := range actionsOf(p) {
+		if a.Kind == UpdateService {
+			aa := a
+			upd = &aa
+		}
+	}
+	if upd == nil || upd.Service != "chat" || upd.Tag != "s2" || upd.OldTag != "s1" {
+		t.Fatalf("want update-service s1->s2, got %+v", upd)
+	}
+}
+
+func TestCompute_BackendRemovedEntirely(t *testing.T) {
+	// cfg has llama only; an observed "old" backend is no longer desired -> its
+	// replicas are drained.
+	cfg := backendCfg(1, "v2")
+	st := observe.FleetState{Hosts: []observe.HostState{
+		hostWith("h", map[int]int{0: 12288, 1: 12288}, []observe.Container{
+			rep("llama", 0, 0, "reg/llama:v2"),
+			rep("old", 0, 1, "reg/old:v1"),
+		}),
+	}}
+	p, _ := Compute(cfg, st)
+	var rm *Action
+	for _, a := range actionsOf(p) {
+		if a.Kind == RemoveReplica && a.Backend == "old" {
+			aa := a
+			rm = &aa
+		}
+	}
+	if rm == nil || rm.Replica != 0 {
+		t.Fatalf("want remove old/0, got %+v", actionsOf(p))
+	}
+}
+
+func TestCompute_PinnedBackendSatisfiedAndPlace(t *testing.T) {
+	cfg := &fleet.Config{
+		Hosts: map[string]fleet.Host{"h": {SSH: "u@h", GPUs: []int{0, 1}}},
+		Backends: map[string]fleet.Backend{
+			"emb": {ImageTag: "v1", Replicas: 2, Placement: fleet.Placement{
+				VRAMMin: "6GiB", GPU: fleet.GPUSpec{Pins: []string{"h:0", "h:1"}}}},
+		},
+	}
+	// replica 0 present on its pin (gpu0) with the right tag -> satisfied;
+	// replica 1 missing -> placed on its pin gpu1.
+	st := observe.FleetState{Hosts: []observe.HostState{
+		hostWith("h", map[int]int{0: 20000, 1: 24576}, []observe.Container{rep("emb", 0, 0, "reg/emb:v1")}),
+	}}
+	p, err := Compute(cfg, st)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	var place *Action
+	for _, a := range actionsOf(p) {
+		if a.Kind == PlaceReplica {
+			aa := a
+			place = &aa
+		}
+	}
+	if place == nil || place.Replica != 1 || place.GPU != 1 {
+		t.Fatalf("want place emb/1 on gpu1, got %+v", place)
+	}
+}
