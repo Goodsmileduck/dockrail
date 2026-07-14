@@ -58,27 +58,27 @@ func (o *Observer) Observe(ctx context.Context) (FleetState, error) {
 
 func (o *Observer) observeHost(ctx context.Context, name string, h fleet.Host) HostState {
 	hs := HostState{Name: name}
-	conn, err := o.Factory(name, h)
-	if err != nil {
+	fail := func(err error) HostState {
 		hs.Err = err.Error()
 		return hs
 	}
+	conn, err := o.Factory(name, h)
+	if err != nil {
+		return fail(err)
+	}
 	psOut, err := conn.Run(ctx, psQuery)
 	if err != nil {
-		hs.Err = err.Error()
-		return hs
+		return fail(err)
 	}
 	hs.Containers = parseContainers(psOut)
 	if len(h.GPUs) > 0 {
 		gpuOut, err := conn.Run(ctx, gpuQuery)
 		if err != nil {
-			hs.Err = err.Error()
-			return hs
+			return fail(err)
 		}
 		gpus, err := parseGPUs(gpuOut, h.GPUs)
 		if err != nil {
-			hs.Err = err.Error()
-			return hs
+			return fail(err)
 		}
 		hs.GPUs = gpus
 	}

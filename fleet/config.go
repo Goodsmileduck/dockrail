@@ -111,6 +111,14 @@ func Load(path string) (*Config, error) {
 	if err := dec.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
+	// Replicas defaults to 1 when unset (0), applied once here before validation
+	// so validate() stays side-effect-free (mirrors config.RetainContainers).
+	for name, b := range cfg.Backends {
+		if b.Replicas == 0 {
+			b.Replicas = 1
+			cfg.Backends[name] = b
+		}
+	}
 	if err := cfg.validate(); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
@@ -132,8 +140,8 @@ func (c *Config) validate() error {
 	// gpuIndex[host] is the set of declared GPU indices, used to validate pins.
 	gpuIndex := make(map[string]map[int]bool, len(c.Hosts))
 	for name, h := range c.Hosts {
-		if !nameRe.MatchString(name) {
-			return fmt.Errorf("hosts.%s: name must match %s", name, nameRe.String())
+		if err := validName("hosts", name); err != nil {
+			return err
 		}
 		if h.SSH == "" {
 			return fmt.Errorf("hosts.%s: ssh is required", name)
@@ -145,17 +153,13 @@ func (c *Config) validate() error {
 		gpuIndex[name] = set
 	}
 	for name, b := range c.Backends {
-		if !nameRe.MatchString(name) {
-			return fmt.Errorf("backends.%s: name must match %s", name, nameRe.String())
+		if err := validName("backends", name); err != nil {
+			return err
 		}
 		if b.ImageTag == "" {
 			return fmt.Errorf("backends.%s: image_tag is required", name)
 		}
-		if b.Replicas == 0 {
-			b.Replicas = 1
-			c.Backends[name] = b
-		}
-		if b.Replicas < 0 {
+		if b.Replicas < 1 {
 			return fmt.Errorf("backends.%s: replicas must be >= 1", name)
 		}
 		p := b.Placement
@@ -183,8 +187,8 @@ func (c *Config) validate() error {
 		}
 	}
 	for name, s := range c.Services {
-		if !nameRe.MatchString(name) {
-			return fmt.Errorf("services.%s: name must match %s", name, nameRe.String())
+		if err := validName("services", name); err != nil {
+			return err
 		}
 		if s.Host == "" {
 			return fmt.Errorf("services.%s: host is required", name)
@@ -206,6 +210,15 @@ func (c *Config) validate() error {
 				return fmt.Errorf("services.%s: wiring.strategy must be nginx-upstream|env-list, got %q", name, u.Wiring.Strategy)
 			}
 		}
+	}
+	return nil
+}
+
+// validName rejects a map-entry name (host/backend/service) that is not
+// shell-safe; kind is the block name used in the error (e.g. "hosts").
+func validName(kind, name string) error {
+	if !nameRe.MatchString(name) {
+		return fmt.Errorf("%s.%s: name must match %s", kind, name, nameRe.String())
 	}
 	return nil
 }
