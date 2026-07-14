@@ -137,11 +137,19 @@ func Load(path string) (*Config, error) {
 
 var nameRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
+// Packing-policy names, shared by config validation and the scheduler so the
+// closed set lives in one place. PolicySpread is the default when unset.
+const (
+	PolicySpread   = "spread"
+	PolicyBinpack  = "binpack"
+	PolicyFirstFit = "first-fit"
+)
+
 // validPolicy allows the empty string (resolves to the default at schedule
 // time) and the three known packing policies.
 func validPolicy(p string) bool {
 	switch p {
-	case "", "spread", "binpack", "first-fit":
+	case "", PolicySpread, PolicyBinpack, PolicyFirstFit:
 		return true
 	}
 	return false

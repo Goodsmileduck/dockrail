@@ -22,7 +22,7 @@ type GPU struct {
 }
 
 func newGPU(p config.Placement) (*GPU, error) {
-	need, err := vram.ParseMiB(p.VRAMMin)
+	need, err := vram.NeededMiB(p.VRAMMin)
 	if err != nil {
 		return nil, err
 	}
@@ -30,7 +30,7 @@ func newGPU(p config.Placement) (*GPU, error) {
 	for _, idx := range p.Pool {
 		pool[idx] = true
 	}
-	return &GPU{pool: pool, needMiB: int(float64(need) * vram.SafetyFactor)}, nil
+	return &GPU{pool: pool, needMiB: need}, nil
 }
 
 // Pick returns the index of a pool GPU with enough free VRAM, or ErrNoFreeGPU.

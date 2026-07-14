@@ -19,7 +19,7 @@ func resolvePolicy(cfg *fleet.Config, b fleet.Backend) string {
 	if cfg.Scheduler.Policy != "" {
 		return cfg.Scheduler.Policy
 	}
-	return "spread"
+	return fleet.PolicySpread
 }
 
 type Assignment struct {
@@ -90,11 +90,11 @@ func Plan(cfg *fleet.Config, state observe.FleetState) (Placements, error) {
 		}
 		need := 0
 		if b.Placement.VRAMMin != "" {
-			m, err := vram.ParseMiB(b.Placement.VRAMMin)
+			n, err := vram.NeededMiB(b.Placement.VRAMMin)
 			if err != nil {
 				return nil, fmt.Errorf("backends.%s: %w", name, err)
 			}
-			need = int(float64(m)*vram.SafetyFactor + 0.5)
+			need = n
 		}
 
 		if len(b.Placement.GPU.Pins) > 0 {
@@ -170,11 +170,11 @@ func selectGPU(policy string, ledger map[gpuRef]int, occupied map[gpuRef]map[str
 			continue
 		}
 		switch policy {
-		case "binpack": // least-free that still fits
+		case fleet.PolicyBinpack: // least-free that still fits
 			if avail < ledger[chosen] {
 				chosen = ref
 			}
-		case "first-fit": // first in (host,index) order — keep the earlier one
+		case fleet.PolicyFirstFit: // first in (host,index) order — keep the earlier one
 			// refs is already sorted; the first match wins, so do nothing.
 		default: // spread: most-free-first
 			if avail > ledger[chosen] {

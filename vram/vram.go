@@ -36,3 +36,15 @@ func ParseMiB(s string) (int, error) {
 	}
 	return int(v*float64(mult) + 0.5), nil // round, not truncate
 }
+
+// NeededMiB returns the VRAM a model requires including the SafetyFactor
+// headroom, rounded to the nearest MiB. It is the single source of truth for
+// "how much GPU memory does this model need," shared by the deploy-time
+// placement strategy and the fleet scheduler so both round identically.
+func NeededMiB(raw string) (int, error) {
+	m, err := ParseMiB(raw)
+	if err != nil {
+		return 0, err
+	}
+	return int(float64(m)*SafetyFactor + 0.5), nil
+}
