@@ -13,6 +13,7 @@ import (
 
 type Config struct {
 	Project   string             `yaml:"project"`
+	Compose   string             `yaml:"compose"`
 	Registry  Registry           `yaml:"registry"`
 	Scheduler Scheduler          `yaml:"scheduler"`
 	Hosts     map[string]Host    `yaml:"hosts"`
@@ -35,6 +36,7 @@ type Host struct {
 }
 
 type Backend struct {
+	Service   string    `yaml:"service"`
 	ImageTag  string    `yaml:"image_tag"`
 	Model     string    `yaml:"model"`
 	Replicas  int       `yaml:"replicas"`
@@ -87,6 +89,7 @@ type Wiring struct {
 }
 
 type Service struct {
+	Service   string    `yaml:"service"`
 	Host      string    `yaml:"host"`
 	ImageTag  string    `yaml:"image_tag"`
 	Uses      []Use     `yaml:"uses"`
@@ -165,6 +168,11 @@ func (c *Config) validate() error {
 	if len(c.Hosts) == 0 {
 		return fmt.Errorf("at least one entry under hosts is required")
 	}
+	if len(c.Backends) > 0 || len(c.Services) > 0 {
+		if c.Compose == "" {
+			return fmt.Errorf("compose is required when backends or services are declared")
+		}
+	}
 	if !validPolicy(c.Scheduler.Policy) {
 		return fmt.Errorf("scheduler.policy must be spread|binpack|first-fit, got %q", c.Scheduler.Policy)
 	}
@@ -186,6 +194,9 @@ func (c *Config) validate() error {
 	for name, b := range c.Backends {
 		if err := validName("backends", name); err != nil {
 			return err
+		}
+		if b.Service == "" {
+			return fmt.Errorf("backends.%s: service is required", name)
 		}
 		if b.ImageTag == "" {
 			return fmt.Errorf("backends.%s: image_tag is required", name)
@@ -238,6 +249,9 @@ func (c *Config) validate() error {
 	for name, s := range c.Services {
 		if err := validName("services", name); err != nil {
 			return err
+		}
+		if s.Service == "" {
+			return fmt.Errorf("services.%s: service is required", name)
 		}
 		if s.Host == "" {
 			return fmt.Errorf("services.%s: host is required", name)
