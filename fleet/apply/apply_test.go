@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/goodsmileduck/dockrail/fleet"
+	"github.com/goodsmileduck/dockrail/fleet/observe"
 	plan "github.com/goodsmileduck/dockrail/fleet/plan"
 )
 
@@ -34,6 +36,85 @@ func demoPlan() plan.Plan {
 		{Name: "rewire", Actions: []plan.Action{{Kind: plan.Rewire, Service: "chat", Backend: "llama"}}},
 		{Name: "drain", Actions: []plan.Action{{Kind: plan.RemoveReplica, Backend: "old", Replica: 0}}},
 	}}
+}
+
+func TestApply_EmptyPlanNoop(t *testing.T) {
+	cfg := &fleet.Config{
+		Hosts: map[string]fleet.Host{"h": {SSH: "user@h", GPUs: []int{0}}},
+		Backends: map[string]fleet.Backend{
+			"llama": {
+				Service:  "llama",
+				ImageTag: "v2",
+				Replicas: 1,
+				Placement: fleet.Placement{
+					VRAMMin: "10GiB",
+					GPU:     fleet.GPUSpec{Auto: true},
+					Pool:    []string{"h"},
+				},
+			},
+		},
+	}
+	observed := observe.FleetState{Hosts: []observe.HostState{{
+		Name: "h",
+		Containers: []observe.Container{{
+			Name:  "llama-0",
+			Image: "registry/llama:v2",
+			Labels: map[string]string{
+				observe.LabelManaged: "true",
+				observe.LabelBackend: "llama",
+				observe.LabelReplica: "0",
+				observe.LabelGPU:     "0",
+			},
+		}},
+		GPUs: []observe.GPUState{{Index: 0, TotalMiB: 24576, UsedMiB: 12288, FreeMiB: 12288}},
+	}}}
+	f := &fakeExec{}
+
+	res, err := Apply(context.Background(), cfg, observed, f, Options{})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(res.Applied) != 0 {
+		t.Fatalf("expected no applied actions, got %+v", res.Applied)
+	}
+	if len(f.done) != 0 {
+		t.Fatalf("expected executor not to run, got %+v", f.done)
+	}
+}
+
+func TestApply_SurfacesWarnings(t *testing.T) {
+	cfg := &fleet.Config{
+		Hosts: map[string]fleet.Host{"h": {SSH: "user@h", GPUs: []int{0}}},
+		Backends: map[string]fleet.Backend{
+			"llama": {
+				Service:  "llama",
+				ImageTag: "v2",
+				Replicas: 1,
+				Placement: fleet.Placement{
+					VRAMMin: "10GiB",
+					GPU:     fleet.GPUSpec{Auto: true},
+					Pool:    []string{"h"},
+				},
+			},
+		},
+	}
+	observed := observe.FleetState{Hosts: []observe.HostState{{
+		Name: "h",
+		Err:  "unreachable",
+		GPUs: []observe.GPUState{{Index: 0, TotalMiB: 24576, FreeMiB: 24576}},
+	}}}
+	f := &fakeExec{}
+
+	res, err := Apply(context.Background(), cfg, observed, f, Options{})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(res.Warnings) == 0 {
+		t.Fatal("expected warning for unreachable host")
+	}
+	if len(f.done) != 0 {
+		t.Fatalf("expected no action on unreachable host, got %+v", f.done)
+	}
 }
 
 func TestRun_PhaseOrder(t *testing.T) {

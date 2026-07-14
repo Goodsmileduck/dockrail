@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/goodsmileduck/dockrail/fleet"
+	"github.com/goodsmileduck/dockrail/fleet/observe"
 	plan "github.com/goodsmileduck/dockrail/fleet/plan"
 )
 
@@ -28,6 +30,14 @@ type Result struct {
 	Failed   *plan.Action
 	Pending  []plan.Action
 	Warnings []string
+}
+
+func Apply(ctx context.Context, cfg *fleet.Config, observed observe.FleetState, x actionExecutor, opts Options) (Result, error) {
+	p, err := plan.Compute(cfg, observed)
+	if err != nil {
+		return Result{}, err
+	}
+	return run(ctx, p, x, opts)
 }
 
 func dispatch(ctx context.Context, x actionExecutor, a plan.Action) error {
