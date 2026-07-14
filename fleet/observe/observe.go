@@ -10,13 +10,32 @@ import (
 	"github.com/goodsmileduck/dockrail/fleet"
 )
 
-const psQuery = `docker ps --format '{{.Names}}\t{{.Image}}'`
+// psQuery MUST stay a single backtick raw string so the literal \t escapes and
+// the embedded double quotes reach docker intact (the format is single-quoted
+// so the shell does not touch it — same shell-safety guarantee as sub-spec 1).
+// Do NOT rebuild this with "\t" concatenation: that inserts real tab bytes and
+// breaks the TestPSQuery_TemplateSurvivesShell guard (which checks for a literal
+// backslash-t) as well as docker template consistency.
+const psQuery = `docker ps --format '{{.Names}}\t{{.Image}}\t{{.Label "dockrail.managed"}}\t{{.Label "dockrail.backend"}}\t{{.Label "dockrail.replica"}}\t{{.Label "dockrail.gpu"}}\t{{.Label "dockrail.service"}}'`
+
+// dockrail container labels: self-describing identity the Planner diffs on.
+const (
+	LabelManaged = "dockrail.managed"
+	LabelBackend = "dockrail.backend"
+	LabelReplica = "dockrail.replica"
+	LabelGPU     = "dockrail.gpu"
+	LabelService = "dockrail.service"
+)
+
+// labelCols maps the trailing psQuery columns (after name, image) to label keys.
+var labelCols = []string{LabelManaged, LabelBackend, LabelReplica, LabelGPU, LabelService}
 
 var errNilConfig = errors.New("observe: nil config")
 
 type Container struct {
-	Name  string `json:"name"`
-	Image string `json:"image"`
+	Name   string            `json:"name"`
+	Image  string            `json:"image"`
+	Labels map[string]string `json:"labels,omitempty"`
 }
 
 type HostState struct {
@@ -92,11 +111,24 @@ func parseContainers(out string) []Container {
 		if line == "" {
 			continue
 		}
-		name, image, ok := strings.Cut(line, "\t")
-		if !ok {
+		parts := strings.Split(line, "\t")
+		if len(parts) < 2 {
 			continue
 		}
-		res = append(res, Container{Name: strings.TrimSpace(name), Image: strings.TrimSpace(image)})
+		c := Container{Name: strings.TrimSpace(parts[0]), Image: strings.TrimSpace(parts[1])}
+		for i, key := range labelCols {
+			col := i + 2
+			if col >= len(parts) {
+				break
+			}
+			if v := strings.TrimSpace(parts[col]); v != "" {
+				if c.Labels == nil {
+					c.Labels = map[string]string{}
+				}
+				c.Labels[key] = v
+			}
+		}
+		res = append(res, c)
 	}
 	return res
 }

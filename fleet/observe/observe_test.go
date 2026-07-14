@@ -80,3 +80,24 @@ func TestObserve_HostErrorRecorded(t *testing.T) {
 		t.Fatalf("good host should still be observed: %+v", byName["good"])
 	}
 }
+
+func TestParseContainers_Labels(t *testing.T) {
+	// Columns: name, image, managed, backend, replica, gpu, service (tab-sep).
+	out := "llama-70b-0\treg/vllm:v0.9.2\ttrue\tllama-70b\t0\t2\t\n" +
+		"chat-api\treg/chat:v2\ttrue\t\t\t\tchat-api\n" +
+		"random\tnginx:latest\t\t\t\t\t\n"
+	cs := parseContainers(out)
+	if len(cs) != 3 {
+		t.Fatalf("want 3, got %d", len(cs))
+	}
+	if cs[0].Labels[LabelBackend] != "llama-70b" || cs[0].Labels[LabelReplica] != "0" || cs[0].Labels[LabelGPU] != "2" {
+		t.Fatalf("replica labels wrong: %+v", cs[0].Labels)
+	}
+	if cs[1].Labels[LabelService] != "chat-api" || cs[1].Labels[LabelManaged] != "true" {
+		t.Fatalf("service labels wrong: %+v", cs[1].Labels)
+	}
+	// unlabeled container: name+image parsed, no dockrail labels
+	if cs[2].Name != "random" || cs[2].Image != "nginx:latest" || len(cs[2].Labels) != 0 {
+		t.Fatalf("unlabeled wrong: %+v", cs[2])
+	}
+}

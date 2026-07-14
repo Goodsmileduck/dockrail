@@ -55,9 +55,26 @@ type gpuRef struct {
 	idx  int
 }
 
-// Plan assigns every GPU-scheduled replica a concrete host:gpu slot.
+// Plan bin-packs all auto replicas from scratch and validates pins.
 func Plan(cfg *fleet.Config, state observe.FleetState) (Placements, error) {
-	ledger := map[gpuRef]int{} // available MiB per schedulable GPU
+	return PlanDelta(cfg, state, nil)
+}
+
+// PlanDelta places only the replicas not already covered by `kept`. Kept
+// replicas keep their GPU (their VRAM is already reflected in state.FreeMiB);
+// they are marked occupied for anti-affinity but not deducted, and are echoed
+// into the returned Placements so the result covers every desired replica.
+func PlanDelta(cfg *fleet.Config, state observe.FleetState, kept Placements) (Placements, error) {
+	keptOf := map[string]map[int]Assignment{}
+	for b, as := range kept {
+		m := make(map[int]Assignment, len(as))
+		for _, a := range as {
+			m[a.Replica] = a
+		}
+		keptOf[b] = m
+	}
+
+	ledger := map[gpuRef]int{}
 	for _, h := range state.Hosts {
 		if h.Err != "" {
 			continue
@@ -66,7 +83,6 @@ func Plan(cfg *fleet.Config, state observe.FleetState) (Placements, error) {
 			ledger[gpuRef{h.Name, g.Index}] = g.FreeMiB
 		}
 	}
-	// occupied[ref] = set of backend names already holding a replica on that GPU.
 	occupied := map[gpuRef]map[string]bool{}
 	place := func(ref gpuRef, backend string, need int) {
 		ledger[ref] -= need
@@ -74,6 +90,16 @@ func Plan(cfg *fleet.Config, state observe.FleetState) (Placements, error) {
 			occupied[ref] = map[string]bool{}
 		}
 		occupied[ref][backend] = true
+	}
+	// Pre-reserve kept replicas for anti-affinity (no VRAM deduct — already running).
+	for b, m := range keptOf {
+		for _, a := range m {
+			ref := gpuRef{a.Host, a.GPU}
+			if occupied[ref] == nil {
+				occupied[ref] = map[string]bool{}
+			}
+			occupied[ref][b] = true
+		}
 	}
 
 	names := make([]string, 0, len(cfg.Backends))
@@ -86,7 +112,7 @@ func Plan(cfg *fleet.Config, state observe.FleetState) (Placements, error) {
 	for _, name := range names {
 		b := cfg.Backends[name]
 		if !b.Placement.GPU.Auto && len(b.Placement.GPU.Pins) == 0 {
-			continue // not GPU-scheduled
+			continue
 		}
 		need := 0
 		if b.Placement.VRAMMin != "" {
@@ -99,6 +125,10 @@ func Plan(cfg *fleet.Config, state observe.FleetState) (Placements, error) {
 
 		if len(b.Placement.GPU.Pins) > 0 {
 			for i, pin := range b.Placement.GPU.Pins {
+				if a, ok := keptOf[name][i]; ok {
+					out[name] = append(out[name], a)
+					continue
+				}
 				host, idx, err := fleet.ParsePin(pin)
 				if err != nil {
 					return nil, fmt.Errorf("backends.%s: %w", name, err)
@@ -117,13 +147,16 @@ func Plan(cfg *fleet.Config, state observe.FleetState) (Placements, error) {
 			continue
 		}
 
-		// auto: place Replicas replicas by spread (most-free-first).
 		pool := map[string]bool{}
 		for _, h := range b.Placement.Pool {
 			pool[h] = true
 		}
 		policy := resolvePolicy(cfg, b)
 		for r := 0; r < b.Replicas; r++ {
+			if a, ok := keptOf[name][r]; ok {
+				out[name] = append(out[name], a)
+				continue
+			}
 			ref, ok, best, aff := selectGPU(policy, ledger, occupied, name, pool, need)
 			if !ok {
 				return nil, &ScheduleError{Backend: name, Replica: r, NeededMiB: need, BestFreeMiB: best, AntiAffinity: aff}
