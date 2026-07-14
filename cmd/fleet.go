@@ -60,16 +60,26 @@ func sshFactory(_ string, h fleet.Host) (connection.Connection, error) {
 	return connection.New(config.Target{Host: h.SSH, Port: h.Port}), nil
 }
 
-func runFleetStatus(ctx context.Context, cfg *fleet.Config, factory observe.ConnFactory, out io.Writer, asJSON bool) error {
+// observeFleet builds an Observer and reads the current fleet state.
+func observeFleet(ctx context.Context, cfg *fleet.Config, factory observe.ConnFactory) (observe.FleetState, error) {
 	o := &observe.Observer{Cfg: cfg, Factory: factory}
-	st, err := o.Observe(ctx)
+	return o.Observe(ctx)
+}
+
+// writeJSON writes v as indented JSON.
+func writeJSON(out io.Writer, v any) error {
+	enc := json.NewEncoder(out)
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
+}
+
+func runFleetStatus(ctx context.Context, cfg *fleet.Config, factory observe.ConnFactory, out io.Writer, asJSON bool) error {
+	st, err := observeFleet(ctx, cfg, factory)
 	if err != nil {
 		return err
 	}
 	if asJSON {
-		enc := json.NewEncoder(out)
-		enc.SetIndent("", "  ")
-		return enc.Encode(st)
+		return writeJSON(out, st)
 	}
 	for _, h := range st.Hosts {
 		fmt.Fprintf(out, "%s:\n", h.Name)
@@ -87,8 +97,7 @@ func runFleetStatus(ctx context.Context, cfg *fleet.Config, factory observe.Conn
 }
 
 func runFleetPlan(ctx context.Context, cfg *fleet.Config, factory observe.ConnFactory, out io.Writer, asJSON bool) error {
-	o := &observe.Observer{Cfg: cfg, Factory: factory}
-	st, err := o.Observe(ctx)
+	st, err := observeFleet(ctx, cfg, factory)
 	if err != nil {
 		return err
 	}
@@ -97,9 +106,7 @@ func runFleetPlan(ctx context.Context, cfg *fleet.Config, factory observe.ConnFa
 		return err
 	}
 	if asJSON {
-		enc := json.NewEncoder(out)
-		enc.SetIndent("", "  ")
-		return enc.Encode(p)
+		return writeJSON(out, p)
 	}
 	for _, w := range p.Warnings {
 		fmt.Fprintf(out, "warning: %s\n", w)

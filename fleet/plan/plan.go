@@ -5,7 +5,8 @@ package plan
 
 import (
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -117,7 +118,7 @@ func Compute(cfg *fleet.Config, observed observe.FleetState) (Plan, error) {
 		}
 	}
 
-	backends := sortedKeys(cfg.Backends)
+	backends := slices.Sorted(maps.Keys(cfg.Backends))
 
 	// A backend whose pool/pin hosts include an unreachable host cannot be
 	// safely reconciled (its replicas may be hidden there): warn and skip it.
@@ -125,7 +126,7 @@ func Compute(cfg *fleet.Config, observed observe.FleetState) (Plan, error) {
 	var warnings []string
 	for _, name := range backends {
 		b := cfg.Backends[name]
-		if !b.Placement.GPU.Auto && len(b.Placement.GPU.Pins) == 0 {
+		if !gpuScheduled(b) {
 			continue
 		}
 		for _, h := range backendHosts(b) {
@@ -146,7 +147,7 @@ func Compute(cfg *fleet.Config, observed observe.FleetState) (Plan, error) {
 	var converge, drain []Action
 	for _, name := range backends {
 		b := cfg.Backends[name]
-		if blocked[name] || (!b.Placement.GPU.Auto && len(b.Placement.GPU.Pins) == 0) {
+		if blocked[name] || !gpuScheduled(b) {
 			continue
 		}
 		for r := 0; r < b.Replicas; r++ {
@@ -167,9 +168,9 @@ func Compute(cfg *fleet.Config, observed observe.FleetState) (Plan, error) {
 	// are excluded from the scheduling problem entirely.
 	schedCfg := *cfg
 	schedCfg.Backends = map[string]fleet.Backend{}
-	for n, b := range cfg.Backends {
+	for _, n := range backends {
 		if !blocked[n] {
-			schedCfg.Backends[n] = b
+			schedCfg.Backends[n] = cfg.Backends[n]
 		}
 	}
 	placements, err := schedule.PlanDelta(&schedCfg, observed, kept)
@@ -178,7 +179,7 @@ func Compute(cfg *fleet.Config, observed observe.FleetState) (Plan, error) {
 	}
 	for _, name := range backends {
 		b := cfg.Backends[name]
-		if blocked[name] || (!b.Placement.GPU.Auto && len(b.Placement.GPU.Pins) == 0) {
+		if blocked[name] || !gpuScheduled(b) {
 			continue
 		}
 		keptR := map[int]bool{}
@@ -196,7 +197,7 @@ func Compute(cfg *fleet.Config, observed observe.FleetState) (Plan, error) {
 	}
 
 	// Extra: observed replicas beyond desired count, or backend not desired.
-	for _, name := range sortedKeys(obs) {
+	for _, name := range slices.Sorted(maps.Keys(obs)) {
 		if blocked[name] {
 			continue
 		}
@@ -204,7 +205,7 @@ func Compute(cfg *fleet.Config, observed observe.FleetState) (Plan, error) {
 		if b, ok := cfg.Backends[name]; ok {
 			desired = b.Replicas
 		}
-		for _, r := range sortedInts(obs[name]) {
+		for _, r := range slices.Sorted(maps.Keys(obs[name])) {
 			if r >= desired {
 				o := obs[name][r]
 				drain = append(drain, Action{Kind: RemoveReplica, Backend: name, Replica: r, Host: o.host, GPU: o.gpu})
@@ -216,7 +217,7 @@ func Compute(cfg *fleet.Config, observed observe.FleetState) (Plan, error) {
 	// Services: deploy/update, and rewire only when the service or its backend
 	// changed this cycle (a steady-state binding needs no rewire).
 	var rewire []Action
-	for _, name := range sortedServiceKeys(cfg.Services) {
+	for _, name := range slices.Sorted(maps.Keys(cfg.Services)) {
 		s := cfg.Services[name]
 		if errHosts[s.Host] {
 			warnings = append(warnings, fmt.Sprintf("service %q: host %q is unreachable — leaving it unplanned", name, s.Host))
@@ -256,31 +257,9 @@ func assemble(converge, rewire, drain []Action) Plan {
 	}}
 }
 
-func sortedKeys[V any](m map[string]V) []string {
-	ks := make([]string, 0, len(m))
-	for k := range m {
-		ks = append(ks, k)
-	}
-	sort.Strings(ks)
-	return ks
-}
-
-func sortedInts(m map[int]obsReplica) []int {
-	ks := make([]int, 0, len(m))
-	for k := range m {
-		ks = append(ks, k)
-	}
-	sort.Ints(ks)
-	return ks
-}
-
-func sortedServiceKeys(m map[string]fleet.Service) []string {
-	ks := make([]string, 0, len(m))
-	for k := range m {
-		ks = append(ks, k)
-	}
-	sort.Strings(ks)
-	return ks
+// gpuScheduled reports whether a backend places replicas on GPUs (auto or pins).
+func gpuScheduled(b fleet.Backend) bool {
+	return b.Placement.GPU.Auto || len(b.Placement.GPU.Pins) > 0
 }
 
 // endpointsOf returns the host of each placed replica (port derivation deferred).

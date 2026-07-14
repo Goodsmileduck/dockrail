@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 
@@ -37,9 +36,7 @@ func runStatus(ctx context.Context, conn connection.Connection, cfg *config.Conf
 		return err
 	}
 	if asJSON {
-		enc := json.NewEncoder(out)
-		enc.SetIndent("", "  ")
-		return enc.Encode(rep)
+		return writeJSON(out, rep)
 	}
 	fmt.Fprintf(out, "current_tag:  %s\n", rep.CurrentTag)
 	fmt.Fprintf(out, "previous_tag: %s\n", rep.PreviousTag)
