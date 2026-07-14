@@ -10,7 +10,7 @@ import (
 	"github.com/goodsmileduck/dockrail/fleet"
 )
 
-const psQuery = "docker ps --format {{.Names}}\\t{{.Image}}"
+const psQuery = `docker ps --format '{{.Names}}\t{{.Image}}'`
 
 var errNilConfig = errors.New("observe: nil config")
 

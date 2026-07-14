@@ -35,3 +35,10 @@ func TestParseGPUs_Empty(t *testing.T) {
 		t.Fatalf("want empty, got %+v", got)
 	}
 }
+
+func TestParseGPUs_NonNumericField(t *testing.T) {
+	// 4 fields but a non-integer memory value must hit the strconv.Atoi branch.
+	if _, err := parseGPUs("0, 24576, oops, 100\n", []int{0}); err == nil {
+		t.Fatal("expected error on non-integer field")
+	}
+}
