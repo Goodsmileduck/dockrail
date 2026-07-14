@@ -12,15 +12,20 @@ import (
 )
 
 type Config struct {
-	Project  string             `yaml:"project"`
-	Registry Registry           `yaml:"registry"`
-	Hosts    map[string]Host    `yaml:"hosts"`
-	Backends map[string]Backend `yaml:"backends"`
-	Services map[string]Service `yaml:"services"`
+	Project   string             `yaml:"project"`
+	Registry  Registry           `yaml:"registry"`
+	Scheduler Scheduler          `yaml:"scheduler"`
+	Hosts     map[string]Host    `yaml:"hosts"`
+	Backends  map[string]Backend `yaml:"backends"`
+	Services  map[string]Service `yaml:"services"`
 }
 
 type Registry struct {
 	Server string `yaml:"server"`
+}
+
+type Scheduler struct {
+	Policy string `yaml:"policy"` // spread|binpack|first-fit; "" = default (spread)
 }
 
 type Host struct {
@@ -40,7 +45,8 @@ type Backend struct {
 type Placement struct {
 	VRAMMin string   `yaml:"vram_min"`
 	GPU     GPUSpec  `yaml:"gpu"`
-	Pool    []string `yaml:"pool"` // host names the scheduler may use for auto
+	Pool    []string `yaml:"pool"`   // host names the scheduler may use for auto
+	Policy  string   `yaml:"policy"` // per-backend override of scheduler.policy
 }
 
 // GPUSpec is polymorphic: the scalar `auto` (scheduler picks) or a sequence of
@@ -127,6 +133,16 @@ func Load(path string) (*Config, error) {
 
 var nameRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
+// validPolicy allows the empty string (resolves to the default at schedule
+// time) and the three known packing policies.
+func validPolicy(p string) bool {
+	switch p {
+	case "", "spread", "binpack", "first-fit":
+		return true
+	}
+	return false
+}
+
 func (c *Config) validate() error {
 	if c.Project == "" {
 		return fmt.Errorf("project is required")
@@ -136,6 +152,9 @@ func (c *Config) validate() error {
 	}
 	if len(c.Hosts) == 0 {
 		return fmt.Errorf("at least one entry under hosts is required")
+	}
+	if !validPolicy(c.Scheduler.Policy) {
+		return fmt.Errorf("scheduler.policy must be spread|binpack|first-fit, got %q", c.Scheduler.Policy)
 	}
 	// gpuIndex[host] is the set of declared GPU indices, used to validate pins.
 	gpuIndex := make(map[string]map[int]bool, len(c.Hosts))
@@ -162,6 +181,9 @@ func (c *Config) validate() error {
 		if b.Replicas < 1 {
 			return fmt.Errorf("backends.%s: replicas must be >= 1", name)
 		}
+		if !validPolicy(b.Placement.Policy) {
+			return fmt.Errorf("backends.%s: placement.policy must be spread|binpack|first-fit, got %q", name, b.Placement.Policy)
+		}
 		p := b.Placement
 		if p.GPU.Auto {
 			if len(p.Pool) == 0 {
@@ -174,7 +196,7 @@ func (c *Config) validate() error {
 			}
 		}
 		for _, pin := range p.GPU.Pins {
-			host, idx, err := parsePin(pin)
+			host, idx, err := ParsePin(pin)
 			if err != nil {
 				return fmt.Errorf("backends.%s: %w", name, err)
 			}
@@ -223,8 +245,8 @@ func validName(kind, name string) error {
 	return nil
 }
 
-// parsePin splits a "host:index" GPU pin.
-func parsePin(pin string) (host string, idx int, err error) {
+// ParsePin splits a "host:index" GPU pin.
+func ParsePin(pin string) (host string, idx int, err error) {
 	i := strings.LastIndex(pin, ":")
 	if i < 0 {
 		return "", 0, fmt.Errorf("gpu pin %q must be host:index", pin)
