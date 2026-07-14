@@ -221,3 +221,32 @@ executes, reports the `Result` (text + `--json`). `--dry-run` prints the plan
   (committed alongside `fleet.yml` in the central fleet repo, or rsync'd); confirm
   the mechanism (likely: assume present on host, as v1 assumes the compose file
   is on the host).
+
+### Deferred during implementation (final-review outcome)
+
+The core engine (override generation, per-action executor, phased orchestration,
+command, fleet lock) is implemented and reviewed. The following were consciously
+deferred rather than built in sub-spec 4:
+
+- **Fleet-wide deploy history / `audit` integration.** Each executed action was
+  to append to a per-host `history.jsonl` (sect. 7). Not implemented: fleet
+  history is the same "single-host mechanism → fleet scope" promotion the lock
+  faced, and belongs with the sub-spec-5 fleet-state work. Fleet-applied
+  placements are currently invisible to `audit`/`status` and have no fleet
+  rollback anchor. **Deferred to sub-spec 5.**
+- **`model` mount on the override.** `replicaOverride` stamps identity labels +
+  GPU pin but does not mount/parameterize the model path; `Backend.Model` is
+  consumed only by the vLLM readiness assertion (identical to v1). Two backends
+  sharing one compose `service:` with different `model` therefore rely on the
+  user's compose template to parameterize the model (e.g. via an env the compose
+  file reads). Documenting the parameterization contract (a `MODEL` env like
+  `TAG`) is **deferred**; today `model` is readiness-only.
+- **Graceful drain + override cleanup.** `RemoveReplica` uses `docker rm -f`
+  (SIGKILL, no drain grace) and leaves the generated `.dockrail-*.override.yml`
+  on the host. A `docker compose … rm -sf` form (graceful stop + bookkeeping)
+  and override-file cleanup are **deferred** polish.
+- **`--on-failure=rollback` past the rewire.** Rollback reverses placed/updated
+  replicas in reverse order; a failure during the drain phase (after rewire has
+  already flipped traffic) would tear down proven NEW capacity. Rollback stays
+  the explicit, opt-in, best-effort path (spec: prefer `hold` + idempotent
+  re-run); a "don't reverse past rewire" guard is **deferred**.
