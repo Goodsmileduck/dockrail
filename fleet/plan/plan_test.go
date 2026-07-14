@@ -104,3 +104,75 @@ func TestCompute_ScaleDownRemoves(t *testing.T) {
 		t.Fatalf("remove not in drain phase: %+v", p.Phases)
 	}
 }
+
+func TestCompute_ServiceDeployAndRewire(t *testing.T) {
+	cfg := &fleet.Config{
+		Backends: map[string]fleet.Backend{
+			"llama": {ImageTag: "v2", Replicas: 1, Placement: fleet.Placement{
+				VRAMMin: "10GiB", Pool: []string{"h"}, GPU: fleet.GPUSpec{Auto: true}}},
+		},
+		Services: map[string]fleet.Service{
+			"chat": {Host: "h", ImageTag: "s1",
+				Uses: []fleet.Use{{Backend: "llama", Wiring: fleet.Wiring{Strategy: "nginx-upstream"}}}},
+		},
+	}
+	// llama/0 already running & satisfied; chat service absent -> deploy + rewire.
+	st := observe.FleetState{Hosts: []observe.HostState{
+		hostWith("h", map[int]int{0: 12288}, []observe.Container{rep("llama", 0, 0, "reg/llama:v2")}),
+	}}
+	p, err := Compute(cfg, st)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	var deploy, rewire *Action
+	for pi := range p.Phases {
+		for ai := range p.Phases[pi].Actions {
+			a := &p.Phases[pi].Actions[ai]
+			if a.Kind == DeployService {
+				deploy = a
+			}
+			if a.Kind == Rewire {
+				rewire = a
+			}
+		}
+	}
+	if deploy == nil || deploy.Service != "chat" || deploy.Host != "h" || deploy.Tag != "s1" {
+		t.Fatalf("service deploy wrong: %+v", deploy)
+	}
+	if rewire == nil || rewire.Service != "chat" || rewire.Backend != "llama" || len(rewire.Endpoints) != 1 || rewire.Endpoints[0] != "h" {
+		t.Fatalf("rewire wrong: %+v", rewire)
+	}
+}
+
+func TestCompute_PhaseOrdering(t *testing.T) {
+	// A plan with a place (converge), a rewire, and a remove (drain) must order
+	// them converge < rewire < drain.
+	cfg := &fleet.Config{
+		Backends: map[string]fleet.Backend{
+			"llama": {ImageTag: "v2", Replicas: 2, Placement: fleet.Placement{
+				VRAMMin: "10GiB", Pool: []string{"h"}, GPU: fleet.GPUSpec{Auto: true}}},
+			"old": {ImageTag: "v1", Replicas: 0, Placement: fleet.Placement{
+				VRAMMin: "10GiB", Pool: []string{"h"}, GPU: fleet.GPUSpec{Auto: true}}},
+		},
+		Services: map[string]fleet.Service{
+			"chat": {Host: "h", ImageTag: "s1",
+				Uses: []fleet.Use{{Backend: "llama", Wiring: fleet.Wiring{Strategy: "nginx-upstream"}}}},
+		},
+	}
+	st := observe.FleetState{Hosts: []observe.HostState{
+		hostWith("h", map[int]int{0: 12288, 1: 24576}, []observe.Container{
+			rep("llama", 0, 0, "reg/llama:v2"),
+			rep("old", 0, 1, "reg/old:v1"),
+		}),
+	}}
+	p, _ := Compute(cfg, st)
+	if len(p.Phases) != 3 || p.Phases[0].Name != "converge" || p.Phases[1].Name != "rewire" || p.Phases[2].Name != "drain" {
+		t.Fatalf("phase names/order wrong: %+v", p.Phases)
+	}
+	if len(p.Phases[1].Actions) == 0 || p.Phases[1].Actions[0].Kind != Rewire {
+		t.Fatalf("rewire phase empty: %+v", p.Phases[1])
+	}
+	if len(p.Phases[2].Actions) == 0 || p.Phases[2].Actions[0].Kind != RemoveReplica {
+		t.Fatalf("drain phase should remove old/0: %+v", p.Phases[2])
+	}
+}

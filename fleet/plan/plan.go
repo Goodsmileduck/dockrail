@@ -162,7 +162,33 @@ func Compute(cfg *fleet.Config, observed observe.FleetState) (Plan, error) {
 		}
 	}
 
-	return assemble(converge, nil, drain), nil
+	// Services: index observed service containers by dockrail.service -> tag.
+	obsSvc := map[string]string{}
+	for _, h := range observed.Hosts {
+		for _, c := range h.Containers {
+			if c.Labels[observe.LabelManaged] != "true" {
+				continue
+			}
+			if s := c.Labels[observe.LabelService]; s != "" {
+				obsSvc[s] = tagOf(c.Image)
+			}
+		}
+	}
+	var rewire []Action
+	for _, name := range sortedServiceKeys(cfg.Services) {
+		s := cfg.Services[name]
+		if cur, ok := obsSvc[name]; !ok {
+			converge = append(converge, Action{Kind: DeployService, Service: name, Host: s.Host, Tag: s.ImageTag})
+		} else if cur != s.ImageTag {
+			converge = append(converge, Action{Kind: UpdateService, Service: name, Host: s.Host, Tag: s.ImageTag, OldTag: cur})
+		}
+		for _, u := range s.Uses {
+			rewire = append(rewire, Action{Kind: Rewire, Service: name, Backend: u.Backend,
+				Endpoints: endpointsOf(placements[u.Backend])})
+		}
+	}
+
+	return assemble(converge, rewire, drain), nil
 }
 
 // assemble builds the three-phase plan, dropping empty phases' actions but
@@ -191,4 +217,22 @@ func sortedInts(m map[int]obsReplica) []int {
 	}
 	sort.Ints(ks)
 	return ks
+}
+
+func sortedServiceKeys(m map[string]fleet.Service) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	sort.Strings(ks)
+	return ks
+}
+
+// endpointsOf returns the host of each placed replica (port derivation deferred).
+func endpointsOf(as []schedule.Assignment) []string {
+	eps := make([]string, 0, len(as))
+	for _, a := range as {
+		eps = append(eps, a.Host)
+	}
+	return eps
 }
