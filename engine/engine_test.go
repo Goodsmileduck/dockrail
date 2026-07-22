@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 
 func engineFixture() (*Engine, *connection.Fake) {
 	f := connection.NewFake()
+	f.Stub("sha256sum", "fixturehash  docker-compose.yml\n", nil)
 	cfg := &config.Config{
 		Project:          "demo",
 		Compose:          "docker-compose.yml",
@@ -98,6 +100,7 @@ func TestDeployReadinessFailureRecordsAndErrors(t *testing.T) {
 
 func TestDeployAppendsFailureRecord(t *testing.T) {
 	f := connection.NewFake()
+	f.Stub("sha256sum", "fixturehash  docker-compose.yml\n", nil)
 	f.Stub("pull", "", fmt.Errorf("boom"))
 	e := &Engine{Conn: f, Cfg: testCfg(false), Out: io.Discard}
 	if err := e.Deploy(context.Background()); err == nil {
@@ -206,6 +209,46 @@ func TestRollback_MultiServicePreservesAnchor(t *testing.T) {
 	}
 	if !strings.Contains(saves[0], `"tag":"v1"`) || !strings.Contains(saves[0], `"outcome":"rolled-back"`) {
 		t.Fatalf("anchor not preserved: %q", saves[0])
+	}
+}
+
+func TestDeploySkipsWhenConfigHashMatches(t *testing.T) {
+	e, f := engineFixture()
+	hash, err := e.desiredHash(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := Record{Tag: "v2", Performer: "ci", Outcome: "deployed", ConfigHash: hash}
+	raw, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Stub("history.jsonl", cannedHistory+string(raw)+"\n", nil)
+
+	if err := e.Deploy(context.Background()); err != nil {
+		t.Fatalf("skipped deploy must not error: %v", err)
+	}
+	for _, c := range f.Commands {
+		if strings.Contains(c, "docker compose") && strings.Contains(c, "up") {
+			t.Fatalf("no-op deploy must not run compose up: %q", c)
+		}
+	}
+
+	// Force bypasses the skip.
+	e2, f2 := engineFixture()
+	f2.Stub("history.jsonl", cannedHistory+string(raw)+"\n", nil)
+	e2.Force = true
+	if err := e2.Deploy(context.Background()); err != nil {
+		t.Fatalf("forced deploy: %v", err)
+	}
+	found := false
+	for _, c := range f2.Commands {
+		if strings.Contains(c, "up -d --no-deps web") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("--force must run compose up despite matching config hash")
 	}
 }
 

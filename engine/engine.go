@@ -21,6 +21,13 @@ type Engine struct {
 	// LockWait is how long Deploy/Rollback wait for the deploy lock before
 	// giving up. Zero = fail fast (the default).
 	LockWait time.Duration
+	// Force bypasses the no-op skip in Deploy: it redeploys even when the
+	// config hash matches the last successful deploy.
+	Force bool
+	// configHash is the digest computed by Deploy for the record it is about
+	// to write. Rollback/RollbackTo never set it, so their records carry no
+	// hash and a subsequent Deploy never skips after a rollback.
+	configHash string
 }
 
 // safeTag guards image tags before they are interpolated into a host shell
@@ -52,6 +59,19 @@ func (e *Engine) Deploy(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
+	hash, err := e.desiredHash(ctx)
+	if err != nil {
+		return err
+	}
+	if !e.Force {
+		if cur, ok := currentRecord(h); ok && cur.success() && cur.ConfigHash != "" && cur.ConfigHash == hash {
+			e.logf("no changes since last deploy (config hash match); skipping — use --force to redeploy")
+			return nil
+		}
+	}
+	e.configHash = hash
+
 	return e.runServices(ctx, func(svc config.Service) string { return svc.ImageTag }, "", "deploy", "deployed", h)
 }
 
@@ -269,7 +289,7 @@ func (e *Engine) finalize(ctx context.Context, tag, outcome string, ids map[stri
 	// copy only; retention (retainedTags/success) reads Tag and Outcome only,
 	// so the in-memory rec below is sufficient. Any future time-based retention
 	// must not trust TS on this local copy.
-	rec := Record{Tag: tag, Outcome: outcome, Services: ids}
+	rec := Record{Tag: tag, Outcome: outcome, Services: ids, ConfigHash: e.configHash}
 	if err := appendRecord(ctx, e.Conn, e.Cfg.Project, rec); err != nil {
 		return err
 	}

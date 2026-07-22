@@ -30,6 +30,7 @@ dockrail check --images     # also report tag-vs-registry digest drift (read-onl
 dockrail deploy --dry-run   # print the plan without mutating the host
 dockrail deploy             # pull, recreate, wait for readiness, cut over
 dockrail deploy --lock-wait 5m # wait for a concurrent deploy's lock instead of failing
+dockrail deploy --force      # redeploy even if nothing changed since last deploy
 dockrail rollback           # restore the previously deployed image tag
 dockrail status             # show deployed + running tag per service
 dockrail status --json      # same, as machine-readable JSON (for agents/scripts)
@@ -71,6 +72,10 @@ services:
 
 Host deploy state (previous/current tag, last failure) lives on the target in
 `~/.dockrail/<project>/state.json`, guarded by a per-project deploy lock.
+
+`deploy` skips when nothing changed since the last successful deploy (compose
+file on target + deploy.yml service config + tag, recorded as `config_hash` in
+history); secret-only changes need `--force`.
 
 ## Readiness
 

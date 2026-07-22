@@ -21,7 +21,7 @@ func TestDryRunPrintsPlanWithoutMutating(t *testing.T) {
 		}},
 	}
 	var out bytes.Buffer
-	if err := runDeploy(context.Background(), f, cfg, &out, true, 0); err != nil {
+	if err := runDeploy(context.Background(), f, cfg, &out, true, 0, false); err != nil {
 		t.Fatal(err)
 	}
 	text := out.String()
