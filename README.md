@@ -25,7 +25,7 @@ Or grab a prebuilt binary from the [Releases](../../releases) page.
 ## Usage
 
 ```bash
-dockrail check              # validate config + probe target host readiness
+dockrail check              # validate config + compose file + probe target host readiness
 dockrail deploy --dry-run   # print the plan without mutating the host
 dockrail deploy             # pull, recreate, wait for readiness, cut over
 dockrail deploy --lock-wait 5m # wait for a concurrent deploy's lock instead of failing
