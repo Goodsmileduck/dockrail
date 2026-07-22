@@ -252,6 +252,38 @@ func TestDeploySkipsWhenConfigHashMatches(t *testing.T) {
 	}
 }
 
+func TestDeployDoesNotSkipAfterTrailingFailure(t *testing.T) {
+	e, f := engineFixture()
+	hash, err := e.desiredHash(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	success := Record{Tag: "v2", Performer: "ci", Outcome: "deployed", ConfigHash: hash}
+	successRaw, err := json.Marshal(success)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := Record{Tag: "v2", Performer: "ci", Outcome: "failed@deploy", ConfigHash: hash}
+	failedRaw, err := json.Marshal(failed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Stub("history.jsonl", cannedHistory+string(successRaw)+"\n"+string(failedRaw)+"\n", nil)
+
+	if err := e.Deploy(context.Background()); err != nil {
+		t.Fatalf("deploy: %v", err)
+	}
+	found := false
+	for _, c := range f.Commands {
+		if strings.Contains(c, "docker compose") && strings.Contains(c, "up") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("deploy after a trailing failure must not skip (compose up must run) even though an earlier success matches the config hash")
+	}
+}
+
 func TestDeployProxyStrategyRoutesCutover(t *testing.T) {
 	t.Setenv("APP_API_KEY", "s3cr3t")
 	e, f := engineFixture()

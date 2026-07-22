@@ -1,3 +1,5 @@
+// Package apply executes a Planner plan across the fleet via generated
+// per-replica compose overrides, health-gated per the fleet serving invariant.
 package apply
 
 import (

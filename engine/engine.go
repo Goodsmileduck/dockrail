@@ -64,8 +64,13 @@ func (e *Engine) Deploy(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// Anchor the skip on the LAST record overall, not the last success:
+	// currentRecord (the rollback anchor) skips trailing failures, so if a
+	// deploy succeeds and a later forced redeploy fails, the service may be
+	// down while the last *successful* record still matches the hash. Anchoring
+	// on the last record makes any trailing failure disable the skip.
 	if !e.Force {
-		if cur, ok := currentRecord(h); ok && cur.success() && cur.ConfigHash != "" && cur.ConfigHash == hash {
+		if n := len(h); n > 0 && h[n-1].success() && h[n-1].ConfigHash != "" && h[n-1].ConfigHash == hash {
 			e.logf("no changes since last deploy (config hash match); skipping — use --force to redeploy")
 			return nil
 		}

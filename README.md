@@ -75,7 +75,9 @@ Host deploy state (previous/current tag, last failure) lives on the target in
 
 `deploy` skips when nothing changed since the last successful deploy (compose
 file on target + deploy.yml service config + tag, recorded as `config_hash` in
-history); secret-only changes need `--force`.
+history); secret-only changes need `--force`. The skip is history-based and
+does not verify the containers are actually running; `--force` redeploys
+regardless.
 
 ## Readiness
 
