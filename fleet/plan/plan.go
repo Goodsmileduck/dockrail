@@ -6,12 +6,14 @@ package plan
 import (
 	"fmt"
 	"maps"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/goodsmileduck/dockrail/fleet"
 	"github.com/goodsmileduck/dockrail/fleet/observe"
+	"github.com/goodsmileduck/dockrail/fleet/override"
 	"github.com/goodsmileduck/dockrail/fleet/schedule"
 )
 
@@ -70,6 +72,30 @@ type obsReplica struct {
 	host string
 	gpu  int
 	tag  string
+	hash string // observed dockrail.config-hash label; "" if absent (pre-upgrade container)
+}
+
+// obsService is an observed managed routed service.
+type obsService struct {
+	tag  string
+	hash string // observed dockrail.config-hash label; "" if absent (pre-upgrade container)
+}
+
+// desiredReplicaHash mirrors override.Replica's hash tuple exactly — apply
+// stamps a replica override with override.Replica(base, template, backend,
+// replica, gpu, tag), which hashes (tag, base, template, backend,
+// itoa(replica), itoa(gpu)). Keep both sides in sync; see the comment on
+// override.Replica.
+func desiredReplicaHash(base, template, backend string, replica, gpu int, tag string) string {
+	return override.Hash(tag, base, template, backend, strconv.Itoa(replica), strconv.Itoa(gpu))
+}
+
+// desiredServiceHash mirrors override.Service's hash tuple exactly — apply
+// stamps a service override with override.Service(base, template, service,
+// tag), which hashes (tag, base, template, service). Keep both sides in
+// sync; see the comment on override.Service.
+func desiredServiceHash(base, template, service, tag string) string {
+	return override.Hash(tag, base, template, service)
 }
 
 func tagOf(image string) string {
@@ -96,7 +122,7 @@ func Compute(cfg *fleet.Config, observed observe.FleetState) (Plan, error) {
 
 	// Index observed managed backend replicas and service tags.
 	obs := map[string]map[int]obsReplica{}
-	obsSvc := map[string]string{}
+	obsSvc := map[string]obsService{}
 	for _, h := range observed.Hosts {
 		for _, c := range h.Containers {
 			if c.Labels[observe.LabelManaged] != "true" {
@@ -111,12 +137,17 @@ func Compute(cfg *fleet.Config, observed observe.FleetState) (Plan, error) {
 				if obs[b] == nil {
 					obs[b] = map[int]obsReplica{}
 				}
-				obs[b][r] = obsReplica{host: h.Name, gpu: g, tag: tagOf(c.Image)}
+				obs[b][r] = obsReplica{host: h.Name, gpu: g, tag: tagOf(c.Image), hash: c.Labels[observe.LabelConfigHash]}
 			} else if s := c.Labels[observe.LabelService]; s != "" {
-				obsSvc[s] = tagOf(c.Image)
+				obsSvc[s] = obsService{tag: tagOf(c.Image), hash: c.Labels[observe.LabelConfigHash]}
 			}
 		}
 	}
+
+	// base is the compose path as apply's overrides reference it (see
+	// apply.actionExec.baseName) — used to reproduce the exact hash tuple
+	// apply stamps on a replica/service override.
+	base := filepath.Base(cfg.Compose)
 
 	backends := slices.Sorted(maps.Keys(cfg.Backends))
 
@@ -157,6 +188,17 @@ func Compute(cfg *fleet.Config, observed observe.FleetState) (Plan, error) {
 			}
 			kept[name] = append(kept[name], schedule.Assignment{Replica: r, Host: o.host, GPU: o.gpu})
 			if o.tag != b.ImageTag {
+				converge = append(converge, Action{Kind: UpdateReplica, Backend: name, Replica: r,
+					Host: o.host, GPU: o.gpu, Tag: b.ImageTag, OldTag: o.tag})
+				changed[name] = true
+			} else if desired := desiredReplicaHash(base, b.Service, name, r, o.gpu, b.ImageTag); o.hash != "" && o.hash != desired {
+				// Right host/gpu/replica/tag, but the override content that
+				// produced this container has drifted (e.g. template
+				// change) -> same update action as a tag mismatch. An
+				// absent/empty label (pre-upgrade container) is treated as
+				// matching so upgrading dockrail itself doesn't trigger a
+				// fleet-wide redeploy; the hash gets stamped at the next
+				// real change.
 				converge = append(converge, Action{Kind: UpdateReplica, Backend: name, Replica: r,
 					Host: o.host, GPU: o.gpu, Tag: b.ImageTag, OldTag: o.tag})
 				changed[name] = true
@@ -227,8 +269,12 @@ func Compute(cfg *fleet.Config, observed observe.FleetState) (Plan, error) {
 		if cur, ok := obsSvc[name]; !ok {
 			converge = append(converge, Action{Kind: DeployService, Service: name, Host: s.Host, Tag: s.ImageTag})
 			svcChanged = true
-		} else if cur != s.ImageTag {
-			converge = append(converge, Action{Kind: UpdateService, Service: name, Host: s.Host, Tag: s.ImageTag, OldTag: cur})
+		} else if cur.tag != s.ImageTag {
+			converge = append(converge, Action{Kind: UpdateService, Service: name, Host: s.Host, Tag: s.ImageTag, OldTag: cur.tag})
+			svcChanged = true
+		} else if desired := desiredServiceHash(base, s.Service, name, s.ImageTag); cur.hash != "" && cur.hash != desired {
+			// Same drift-vs-back-compat rule as the replica branch above.
+			converge = append(converge, Action{Kind: UpdateService, Service: name, Host: s.Host, Tag: s.ImageTag, OldTag: cur.tag})
 			svcChanged = true
 		}
 		for _, u := range s.Uses {

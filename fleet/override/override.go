@@ -28,6 +28,8 @@ func Hash(parts ...string) string {
 // a distinct service (not a container_name on the shared template) because
 // docker compose operates on services. The config-hash label is the Hash of
 // the tuple that shapes this override, so plan can diff desired vs observed.
+// Mirror: fleet/plan.desiredReplicaHash reproduces this exact tuple — keep
+// both sides in sync if either changes.
 func Replica(base, template, backend string, replica, gpu int, tag string) (body, hash string) {
 	name := fmt.Sprintf("%s-%d", backend, replica)
 	hash = Hash(tag, base, template, backend, strconv.Itoa(replica), strconv.Itoa(gpu))
@@ -63,6 +65,8 @@ func Replica(base, template, backend string, replica, gpu int, tag string) (body
 // Service returns an override for a routed service: its own service
 // extending the template, stamped with the dockrail.service label and the
 // config-hash label the Planner diffs against.
+// Mirror: fleet/plan.desiredServiceHash reproduces this exact tuple — keep
+// both sides in sync if either changes.
 func Service(base, template, service, tag string) (body, hash string) {
 	hash = Hash(tag, base, template, service)
 	body = fmt.Sprintf(`services:
