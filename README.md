@@ -148,6 +148,21 @@ it skips login and assumes the host is already authenticated. Secret values are
 written to the target env-file or login pipe, but are not passed as command
 arguments to later compose commands or `docker login`.
 
+Setting `secrets.provider: infisical` in `deploy.yml` switches where the
+`secrets.from_env`-listed names are fetched *from*, without changing how
+they're delivered to the host: `dockrail` authenticates to Infisical with a
+machine identity (universal auth) and fetches secrets over its REST API using
+stdlib `net/http` only — no SDK dependency, keeping the single static-binary
+guarantee (D1). Configure it via dockrail's own environment, never
+`deploy.yml`: `INFISICAL_CLIENT_ID`, `INFISICAL_CLIENT_SECRET`,
+`INFISICAL_PROJECT_ID`, `INFISICAL_ENVIRONMENT` (all required), and
+optionally `INFISICAL_SITE_URL` (default `https://app.infisical.com`) and
+`INFISICAL_SECRET_PATH` (default `/`; accepts comma-separated paths, e.g.
+`/,/apps` — later paths win on key collision). Delivery to the host is
+unchanged: values still land in the mode-600 env-file. A Bitwarden provider is
+deferred — its official Go SDK is cgo-backed and conflicts with D1's static
+binary; revisit if a pure-Go client becomes available.
+
 ## Docs
 
 - [GitOps-style workflow](docs/gitops.md) — PR-driven deploys with GitHub Actions or GitLab CI

@@ -47,9 +47,3 @@ func (Env) Fetch(_ context.Context, names []string) (map[string]string, error) {
 	}
 	return out, nil
 }
-
-// NewInfisical is a temporary stub so New compiles; Task 10 replaces it with
-// a real Infisical-backed provider.
-func NewInfisical() (Provider, error) {
-	return nil, fmt.Errorf("infisical provider: not yet implemented")
-}
