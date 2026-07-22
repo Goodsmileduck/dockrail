@@ -3,7 +3,8 @@ package engine
 import (
 	"context"
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/goodsmileduck/dockrail/config"
@@ -19,13 +20,8 @@ type Drift struct {
 // lookups run on the target (agentless; the host's docker creds apply).
 // Advisory only — dockrail never redeploys on drift (D10).
 func ImageDrift(ctx context.Context, conn connection.Connection, cfg *config.Config) []Drift {
-	names := make([]string, 0, len(cfg.Services))
-	for n := range cfg.Services {
-		names = append(names, n)
-	}
-	sort.Strings(names)
 	var out []Drift
-	for _, name := range names {
+	for _, name := range slices.Sorted(maps.Keys(cfg.Services)) {
 		img := cfg.Services[name].ImageTag
 		if strings.Contains(img, "@sha256:") || !safeTag.MatchString(img) {
 			continue // pinned = immutable; unsafe = already rejected by config validation

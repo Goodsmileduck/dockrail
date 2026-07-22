@@ -70,7 +70,7 @@ func (x *actionExec) place(ctx context.Context, a plan.Action) error {
 	}
 	name := fmt.Sprintf("%s-%d", a.Backend, a.Replica)
 	ov := x.overridePath(name)
-	body, _ := override.Replica(x.baseName(), b.Service, a.Backend, a.Replica, a.GPU, a.Tag)
+	body := override.Replica(x.baseName(), b.Service, a.Backend, a.Replica, a.GPU, a.Tag)
 	if err := x.writeFile(ctx, ov, body); err != nil {
 		return fmt.Errorf("place %s: write override: %w", name, err)
 	}
@@ -103,7 +103,7 @@ func (x *actionExec) deployService(ctx context.Context, a plan.Action) error {
 		return fmt.Errorf("deploy %s: unsafe tag %q", a.Service, a.Tag)
 	}
 	ov := x.overridePath(a.Service)
-	body, _ := override.Service(x.baseName(), s.Service, a.Service, a.Tag)
+	body := override.Service(x.baseName(), s.Service, a.Service, a.Tag)
 	if err := x.writeFile(ctx, ov, body); err != nil {
 		return fmt.Errorf("deploy %s: write override: %w", a.Service, err)
 	}

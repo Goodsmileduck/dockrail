@@ -7,7 +7,8 @@ package composecheck
 import (
 	"context"
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 
 	"github.com/compose-spec/compose-go/v2/cli"
 	"github.com/compose-spec/compose-go/v2/types"
@@ -46,13 +47,8 @@ func Validate(ctx context.Context, cfg *config.Config) []error {
 	for name := range project.Services {
 		present[name] = true
 	}
-	names := make([]string, 0, len(cfg.Services))
-	for n := range cfg.Services {
-		names = append(names, n)
-	}
-	sort.Strings(names)
 	var errs []error
-	for _, name := range names {
+	for _, name := range slices.Sorted(maps.Keys(cfg.Services)) {
 		svc := cfg.Services[name]
 		want := []string{name}
 		if svc.Cutover.Strategy == "proxy" {

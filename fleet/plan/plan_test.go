@@ -1,7 +1,6 @@
 package plan
 
 import (
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -307,12 +306,11 @@ func TestCompute_HashDrift_EmitsUpdate(t *testing.T) {
 // calls to the same helper produce equal strings.
 func TestCompute_ReplicaOverrideRoundTrip_NoAction(t *testing.T) {
 	cfg := backendCfg(1, "v2")
-	base := filepath.Base(cfg.Compose)
 	tmpl := cfg.Backends["llama"].Service
-	body, hash := override.Replica(base, tmpl, "llama", 0, 0, "v2")
+	body := override.Replica(cfg.Compose, tmpl, "llama", 0, 0, "v2")
 	label := extractConfigHashLabel(t, body)
-	if label != hash {
-		t.Fatalf("rendered config-hash label %q != returned hash %q", label, hash)
+	if want := override.ReplicaHash(cfg.Compose, tmpl, "llama", 0, 0, "v2"); label != want {
+		t.Fatalf("rendered config-hash label %q != ReplicaHash %q", label, want)
 	}
 	c := rep("llama", 0, 0, "reg/llama:v2")
 	c.Labels[observe.LabelConfigHash] = label
@@ -346,9 +344,8 @@ func extractConfigHashLabel(t *testing.T, body string) string {
 
 func TestCompute_HashMatch_NoAction(t *testing.T) {
 	cfg := backendCfg(1, "v2")
-	base := filepath.Base(cfg.Compose)
 	tmpl := cfg.Backends["llama"].Service
-	hash := override.Hash("v2", base, tmpl, "llama", "0", "0")
+	hash := override.ReplicaHash(cfg.Compose, tmpl, "llama", 0, 0, "v2")
 	c := rep("llama", 0, 0, "reg/llama:v2")
 	c.Labels[observe.LabelConfigHash] = hash
 	st := observe.FleetState{Hosts: []observe.HostState{

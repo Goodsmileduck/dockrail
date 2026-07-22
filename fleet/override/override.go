@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -24,14 +25,19 @@ func Hash(parts ...string) string {
 
 // ReplicaHash is the single source of the replica hash tuple; Replica stamps
 // it and the Planner diffs it — both MUST call this, never inline Hash.
-func ReplicaHash(base, template, backend string, replica, gpu int, tag string) string {
-	return Hash(tag, base, template, backend, strconv.Itoa(replica), strconv.Itoa(gpu))
+// compose may be the full compose path or its basename: filepath.Base is
+// applied here, the one place the override's compose reference is
+// normalized, so plan (which has the full path) and apply (which pre-bases
+// it) cannot diverge.
+func ReplicaHash(compose, template, backend string, replica, gpu int, tag string) string {
+	return Hash(tag, filepath.Base(compose), template, backend, strconv.Itoa(replica), strconv.Itoa(gpu))
 }
 
 // ServiceHash is the single source of the service hash tuple; Service stamps
 // it and the Planner diffs it — both MUST call this, never inline Hash.
-func ServiceHash(base, template, service, tag string) string {
-	return Hash(tag, base, template, service)
+// compose is normalized with filepath.Base like ReplicaHash.
+func ServiceHash(compose, template, service, tag string) string {
+	return Hash(tag, filepath.Base(compose), template, service)
 }
 
 // Replica returns a compose override defining the replica as its own
@@ -41,10 +47,11 @@ func ServiceHash(base, template, service, tag string) string {
 // docker compose operates on services. The config-hash label is ReplicaHash
 // of the tuple that shapes this override, so plan can diff desired vs
 // observed.
-func Replica(base, template, backend string, replica, gpu int, tag string) (body, hash string) {
+func Replica(compose, template, backend string, replica, gpu int, tag string) string {
 	name := fmt.Sprintf("%s-%d", backend, replica)
-	hash = ReplicaHash(base, template, backend, replica, gpu, tag)
-	body = fmt.Sprintf(`services:
+	base := filepath.Base(compose)
+	hash := ReplicaHash(compose, template, backend, replica, gpu, tag)
+	return fmt.Sprintf(`services:
   %s:
     extends:
       file: %s
@@ -70,15 +77,15 @@ func Replica(base, template, backend string, replica, gpu int, tag string) (body
 		observe.LabelGPU, gpu,
 		observe.LabelConfigHash, hash,
 		gpu)
-	return body, hash
 }
 
 // Service returns an override for a routed service: its own service
 // extending the template, stamped with the dockrail.service label and the
 // config-hash label (ServiceHash) the Planner diffs against.
-func Service(base, template, service, tag string) (body, hash string) {
-	hash = ServiceHash(base, template, service, tag)
-	body = fmt.Sprintf(`services:
+func Service(compose, template, service, tag string) string {
+	base := filepath.Base(compose)
+	hash := ServiceHash(compose, template, service, tag)
+	return fmt.Sprintf(`services:
   %s:
     extends:
       file: %s
@@ -91,5 +98,4 @@ func Service(base, template, service, tag string) (body, hash string) {
 `, service, base, template, service,
 		observe.LabelManaged, observe.LabelService, service,
 		observe.LabelConfigHash, hash)
-	return body, hash
 }

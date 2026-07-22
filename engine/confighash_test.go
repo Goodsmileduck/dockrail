@@ -9,18 +9,18 @@ import (
 	"github.com/goodsmileduck/dockrail/connection"
 )
 
-func hashEngine(t *testing.T, tag string) (*Engine, *connection.Fake) {
+func hashEngine(t *testing.T, tag, composeStub string) (*Engine, *connection.Fake) {
 	t.Helper()
 	fake := connection.NewFake()
-	fake.Stub("sha256sum", "abc123  docker-compose.yml\n", nil)
+	fake.Stub("sha256sum", composeStub, nil)
 	cfg := &config.Config{Project: "demo", Compose: "docker-compose.yml",
 		Services: map[string]config.Service{"web": {ImageTag: tag}}}
 	return &Engine{Conn: fake, Cfg: cfg, Out: &strings.Builder{}}, fake
 }
 
 func TestDesiredHash_StableForSameInputs(t *testing.T) {
-	e1, _ := hashEngine(t, "v1")
-	e2, _ := hashEngine(t, "v1")
+	e1, _ := hashEngine(t, "v1", "abc123  docker-compose.yml\n")
+	e2, _ := hashEngine(t, "v1", "abc123  docker-compose.yml\n")
 	h1, err := e1.desiredHash(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -32,8 +32,8 @@ func TestDesiredHash_StableForSameInputs(t *testing.T) {
 }
 
 func TestDesiredHash_ChangesWithTag(t *testing.T) {
-	e1, _ := hashEngine(t, "v1")
-	e2, _ := hashEngine(t, "v2")
+	e1, _ := hashEngine(t, "v1", "abc123  docker-compose.yml\n")
+	e2, _ := hashEngine(t, "v2", "abc123  docker-compose.yml\n")
 	h1, _ := e1.desiredHash(context.Background())
 	h2, _ := e2.desiredHash(context.Background())
 	if h1 == h2 {
@@ -42,12 +42,8 @@ func TestDesiredHash_ChangesWithTag(t *testing.T) {
 }
 
 func TestDesiredHash_ChangesWithRemoteCompose(t *testing.T) {
-	e1, _ := hashEngine(t, "v1")
-	fake2 := connection.NewFake()
-	fake2.Stub("sha256sum", "def456  docker-compose.yml\n", nil)
-	cfg2 := &config.Config{Project: "demo", Compose: "docker-compose.yml",
-		Services: map[string]config.Service{"web": {ImageTag: "v1"}}}
-	e2 := &Engine{Conn: fake2, Cfg: cfg2, Out: &strings.Builder{}}
+	e1, _ := hashEngine(t, "v1", "abc123  docker-compose.yml\n")
+	e2, _ := hashEngine(t, "v1", "def456  docker-compose.yml\n")
 	h1, _ := e1.desiredHash(context.Background())
 	h2, _ := e2.desiredHash(context.Background())
 	if h1 == h2 {

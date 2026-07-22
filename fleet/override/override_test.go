@@ -23,7 +23,8 @@ func TestHash_DeterministicAndOrderSensitive(t *testing.T) {
 }
 
 func TestReplica_StampsConfigHashLabel(t *testing.T) {
-	body, hash := Replica("compose.yml", "vllm", "b1", 0, 1, "example.com/vllm:v2")
+	body := Replica("compose.yml", "vllm", "b1", 0, 1, "example.com/vllm:v2")
+	hash := ReplicaHash("compose.yml", "vllm", "b1", 0, 1, "example.com/vllm:v2")
 	if !strings.Contains(body, `dockrail.config-hash: "`+hash+`"`) {
 		t.Fatalf("override missing config-hash label:\n%s", body)
 	}
@@ -36,14 +37,24 @@ func TestReplica_StampsConfigHashLabel(t *testing.T) {
 }
 
 func TestService_StampsConfigHashLabel(t *testing.T) {
-	body, hash := Service("compose.yml", "api-tpl", "api", "example.com/api:v3")
+	body := Service("compose.yml", "api-tpl", "api", "example.com/api:v3")
+	hash := ServiceHash("compose.yml", "api-tpl", "api", "example.com/api:v3")
 	if !strings.Contains(body, `dockrail.config-hash: "`+hash+`"`) {
 		t.Fatalf("override missing config-hash label:\n%s", body)
 	}
 }
 
+func TestHashes_NormalizeComposePath(t *testing.T) {
+	if ReplicaHash("/srv/app/compose.yml", "vllm", "b1", 0, 1, "v1") != ReplicaHash("compose.yml", "vllm", "b1", 0, 1, "v1") {
+		t.Fatal("ReplicaHash must normalize the compose path with filepath.Base")
+	}
+	if ServiceHash("/srv/app/compose.yml", "api-tpl", "api", "v1") != ServiceHash("compose.yml", "api-tpl", "api", "v1") {
+		t.Fatal("ServiceHash must normalize the compose path with filepath.Base")
+	}
+}
+
 func TestReplicaOverride(t *testing.T) {
-	got, _ := Replica("docker-compose.yml", "vllm", "llama-70b", 2, 1, "example.com/llama:v1")
+	got := Replica("docker-compose.yml", "vllm", "llama-70b", 2, 1, "example.com/llama:v1")
 	for _, want := range []string{
 		"llama-70b-2:",
 		"file: docker-compose.yml",
@@ -62,7 +73,7 @@ func TestReplicaOverride(t *testing.T) {
 }
 
 func TestServiceOverride(t *testing.T) {
-	got, _ := Service("docker-compose.yml", "chat-api", "chat-api", "example.com/chat-api:v1")
+	got := Service("docker-compose.yml", "chat-api", "chat-api", "example.com/chat-api:v1")
 	for _, want := range []string{"chat-api:", "service: chat-api", "container_name: chat-api", observe.LabelService + ": chat-api"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("service override missing %q:\n%s", want, got)
