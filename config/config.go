@@ -39,7 +39,8 @@ type Target struct {
 	Port int    `yaml:"port"` // 0 = 22
 }
 type Secrets struct {
-	FromEnv []string `yaml:"from_env"`
+	Provider string   `yaml:"provider"` // ""|env|infisical, default env
+	FromEnv  []string `yaml:"from_env"` // required secret names, for any provider
 }
 type Service struct {
 	ImageTag  string    `yaml:"image_tag"`
@@ -105,6 +106,11 @@ func (c *Config) validate() error {
 	}
 	if c.RetainContainers < 0 {
 		return fmt.Errorf("retain_containers must be >= 1")
+	}
+	switch c.Secrets.Provider {
+	case "", "env", "infisical":
+	default:
+		return fmt.Errorf("secrets.provider must be env|infisical, got %q", c.Secrets.Provider)
 	}
 	if len(c.Services) == 0 {
 		return fmt.Errorf("at least one entry under services is required")

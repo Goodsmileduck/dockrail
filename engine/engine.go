@@ -10,6 +10,7 @@ import (
 
 	"github.com/goodsmileduck/dockrail/config"
 	"github.com/goodsmileduck/dockrail/connection"
+	"github.com/goodsmileduck/dockrail/secrets"
 	"github.com/goodsmileduck/dockrail/strategy/readiness"
 )
 
@@ -61,11 +62,15 @@ func (e *Engine) Deploy(ctx context.Context) error {
 // record's outcome. h is the pre-append history, threaded into finalize so it
 // need not re-read the file. The caller holds the deploy lock.
 func (e *Engine) runServices(ctx context.Context, tagFor func(config.Service) string, failTag, step, outcome string, h []Record) error {
-	secrets, err := collectSecrets(e.Cfg.Secrets.FromEnv)
+	prov, err := secrets.New(e.Cfg.Secrets.Provider)
 	if err != nil {
 		return e.recordFailure(ctx, failTag, "secrets", err)
 	}
-	prefix, err := writeSecretsFile(ctx, e.Conn, e.Cfg.Project, secrets)
+	vals, err := prov.Fetch(ctx, e.Cfg.Secrets.FromEnv)
+	if err != nil {
+		return e.recordFailure(ctx, failTag, "secrets", err)
+	}
+	prefix, err := writeSecretsFile(ctx, e.Conn, e.Cfg.Project, vals)
 	if err != nil {
 		return e.recordFailure(ctx, failTag, "secrets", err)
 	}
