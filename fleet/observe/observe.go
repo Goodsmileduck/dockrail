@@ -25,6 +25,11 @@ const (
 	LabelReplica = "dockrail.replica"
 	LabelGPU     = "dockrail.gpu"
 	LabelService = "dockrail.service"
+
+	// LabelConfigHash is stamped by fleet/override onto generated overrides;
+	// the Planner diffs it against the desired hash (Task 4 wires the
+	// psQuery column that surfaces it from `docker ps`).
+	LabelConfigHash = "dockrail.config-hash"
 )
 
 // labelCols maps the trailing psQuery columns (after name, image) to label keys.
