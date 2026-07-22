@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/goodsmileduck/dockrail/engine"
 )
 
 func TestCheck_ReportsMissingComposeService(t *testing.T) {
@@ -33,5 +35,15 @@ services:
 	}
 	if !bytes.Contains(errb.Bytes(), []byte(`no service "web"`)) {
 		t.Fatalf("stderr missing compose validation error: %s", errb.String())
+	}
+}
+
+func TestFormatDrift(t *testing.T) {
+	d := engine.Drift{Service: "web", Image: "example.com/app:prod",
+		Local: "sha256:aaa", Remote: "sha256:bbb", Note: "drift"}
+	got := formatDrift(d)
+	want := "DRIFT web example.com/app:prod host=sha256:aaa registry=sha256:bbb"
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
 	}
 }

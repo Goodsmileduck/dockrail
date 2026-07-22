@@ -48,7 +48,7 @@ func loadConn(cmd *cobra.Command) (*config.Config, connection.Connection, error)
 }
 
 func newCheckCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "check",
 		Short: "validate config and target host readiness",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -73,7 +73,29 @@ func newCheckCmd() *cobra.Command {
 				return fmt.Errorf("%d check(s) failed", len(errs))
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), "all checks passed")
+
+			images, _ := cmd.Flags().GetBool("images")
+			if images {
+				drifts := engine.ImageDrift(cmd.Context(), conn, cfg)
+				if len(drifts) == 0 {
+					fmt.Fprintln(cmd.OutOrStdout(), "images: all digests match")
+				} else {
+					for _, d := range drifts {
+						fmt.Fprintln(cmd.OutOrStdout(), formatDrift(d))
+					}
+				}
+			}
 			return nil
 		},
 	}
+	cmd.Flags().Bool("images", false, "also compare host image digests against the registry (advisory)")
+	return cmd
+}
+
+// formatDrift renders a single ImageDrift finding as one advisory line.
+func formatDrift(d engine.Drift) string {
+	if d.Note != "drift" {
+		return fmt.Sprintf("WARN %s %s: %s", d.Service, d.Image, d.Note)
+	}
+	return fmt.Sprintf("DRIFT %s %s host=%s registry=%s", d.Service, d.Image, d.Local, d.Remote)
 }
