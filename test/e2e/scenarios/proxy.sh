@@ -36,18 +36,18 @@ scenario_proxy() {
   runc "rm -f $stopf" || true
   local fails; fails="$(grep -c x "$hits" 2>/dev/null || true)"
 
+  # Single teardown for every exit path: stop the compose project, remove the
+  # nginx fixture, drop temp files. (Named to not shadow run.sh's global cleanup.)
+  _teardown() { runc "TAG=v2 docker compose -f $TARGET_DIR/compose-proxy.yml down >/dev/null 2>&1" || true; down_fixture "$ns"; rm -f "$dy" "$hits"; }
+
   echo "no-blip: $fails failed requests across the cutover window"
-  [ "$fails" -eq 0 ] || { echo "FAIL: blip detected ($fails failures)"; down_fixture "$ns"; rm -f "$dy" "$hits"; return 1; }
+  [ "$fails" -eq 0 ] || { echo "FAIL: blip detected ($fails failures)"; _teardown; return 1; }
 
   if [ "$v2_rc" -ne 0 ]; then
-    echo "FAIL: v2 proxy overlap deploy failed (rc=$v2_rc)"
-    runc "TAG=v2 docker compose -f $TARGET_DIR/compose-proxy.yml down >/dev/null 2>&1" || true
-    down_fixture "$ns"; rm -f "$dy" "$hits"; return 1
+    echo "FAIL: v2 proxy overlap deploy failed (rc=$v2_rc)"; _teardown; return 1
   fi
   assert_version "$nginx/version" v2
 
-  runc "TAG=v2 docker compose -f $TARGET_DIR/compose-proxy.yml down >/dev/null 2>&1" || true
-  down_fixture "$ns"
-  rm -f "$dy" "$hits"
+  _teardown
   echo "PASS scenario_proxy"
 }

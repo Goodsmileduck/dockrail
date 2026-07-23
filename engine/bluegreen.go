@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/goodsmileduck/dockrail/config"
 	"github.com/goodsmileduck/dockrail/strategy/placement"
@@ -33,38 +32,26 @@ func (e *Engine) activeColor(ctx context.Context, service string) (string, error
 	return "", nil
 }
 
-// containerIP returns the first IPv4 across the container's networks. Single-
-// network is the norm for proxy-path color services; multi-network resolves to
-// the first address (documented limitation).
-func (e *Engine) containerIP(ctx context.Context, cid string) (string, error) {
-	out, err := e.Conn.Run(ctx, fmt.Sprintf(
-		"docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' %s", cid))
-	if err != nil {
-		return "", fmt.Errorf("inspect %s: %w", cid, err)
-	}
-	fields := strings.Fields(out)
-	if len(fields) == 0 {
-		return "", fmt.Errorf("no IP for container %s", cid)
-	}
-	return fields[0], nil
-}
-
 // probeGreen resolves the freshly-started color's container, looks up its IP on
 // the docker network, and probes it there — the proxy path never host-publishes
-// the color, so localhost would not reach it.
-func (e *Engine) probeGreen(ctx context.Context, prober readiness.Prober, greenSvc string) error {
+// the color, so localhost would not reach it. It returns the resolved container
+// id so the caller can record the live slot without re-querying it.
+func (e *Engine) probeGreen(ctx context.Context, prober readiness.Prober, greenSvc string) (string, error) {
 	cid, err := e.composePS(ctx, greenSvc)
 	if err != nil {
-		return fmt.Errorf("resolve %s container: %w", greenSvc, err)
+		return "", fmt.Errorf("resolve %s container: %w", greenSvc, err)
 	}
 	if cid == "" {
-		return fmt.Errorf("%s not running after start", greenSvc)
+		return "", fmt.Errorf("%s not running after start", greenSvc)
 	}
 	ip, err := e.containerIP(ctx, cid)
 	if err != nil {
-		return err
+		return "", err
 	}
-	return prober.Probe(ctx, e.Conn, ip)
+	if err := prober.Probe(ctx, e.Conn, ip); err != nil {
+		return "", err
+	}
+	return cid, nil
 }
 
 func (e *Engine) composeCmd(prefix, tag, gpu, action, svcColor string) string {
@@ -138,7 +125,8 @@ func (e *Engine) proxyCutover(ctx context.Context, name string, svc config.Servi
 		if _, err := e.Conn.Run(ctx, e.composeCmd(prefix, tag, gpu, "up -d --no-deps", greenSvc)); err != nil {
 			return "", fmt.Errorf("start green: %w", err)
 		}
-		if err := e.probeGreen(ctx, prober, greenSvc); err != nil {
+		cid, err := e.probeGreen(ctx, prober, greenSvc)
+		if err != nil {
 			// Auto-rollback: green never became ready and blue is down. Use
 			// `start`, not `up -d`, to restart blue's existing stopped container
 			// as-is — `up -d` would recreate it with the NEW TAG (the broken
@@ -150,7 +138,7 @@ func (e *Engine) proxyCutover(ctx context.Context, name string, svc config.Servi
 		if err := flipUpstream(ctx, e.Conn, e.Cfg.Project, svc.Cutover.Proxy, name, target, svc.Readiness.Port); err != nil {
 			return "", err
 		}
-		return e.slotID(ctx, greenSvc), nil
+		return cid, nil
 	}
 
 	// Zero-gap: green up alongside blue, gate, flip, then stop blue.
@@ -159,7 +147,8 @@ func (e *Engine) proxyCutover(ctx context.Context, name string, svc config.Servi
 	if _, err := e.Conn.Run(ctx, e.composeCmd(prefix, tag, gpu, "up -d --no-deps", greenSvc)); err != nil {
 		return "", fmt.Errorf("start green: %w", err)
 	}
-	if err := e.probeGreen(ctx, prober, greenSvc); err != nil {
+	cid, err := e.probeGreen(ctx, prober, greenSvc)
+	if err != nil {
 		// Green failed but blue still serves; tear down green, leave blue.
 		_, _ = e.Conn.Run(ctx, e.composeCmd(prefix, tag, "", "stop", greenSvc))
 		return "", fmt.Errorf("green readiness failed (blue still serving): %w", err)
@@ -171,5 +160,5 @@ func (e *Engine) proxyCutover(ctx context.Context, name string, svc config.Servi
 	if _, err := e.Conn.Run(ctx, e.composeCmd(prefix, tag, "", "stop", blueSvc)); err != nil {
 		return "", fmt.Errorf("stop blue after flip: %w", err)
 	}
-	return e.slotID(ctx, greenSvc), nil
+	return cid, nil
 }

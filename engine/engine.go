@@ -339,9 +339,35 @@ func (e *Engine) runningImage(ctx context.Context, composeName string) (cid, ima
 	if cid == "" {
 		return "", "", nil
 	}
-	img, err := e.Conn.Run(ctx, fmt.Sprintf("docker inspect --format '{{.Config.Image}}' %s", cid))
+	img, err := e.inspectField(ctx, cid, "{{.Config.Image}}")
 	if err != nil {
 		return cid, "", err
 	}
-	return cid, strings.TrimSpace(img), nil
+	return cid, img, nil
+}
+
+// inspectField runs `docker inspect --format <format>` on a container id and
+// returns the trimmed output. The single place a docker inspect is issued, so
+// runningImage and containerIP stay consistent.
+func (e *Engine) inspectField(ctx context.Context, cid, format string) (string, error) {
+	out, err := e.Conn.Run(ctx, fmt.Sprintf("docker inspect --format '%s' %s", format, cid))
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// containerIP returns the first IPv4 across the container's networks. Single-
+// network is the norm for proxy-path color services; multi-network resolves to
+// the first address (documented limitation).
+func (e *Engine) containerIP(ctx context.Context, cid string) (string, error) {
+	out, err := e.inspectField(ctx, cid, "{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}")
+	if err != nil {
+		return "", fmt.Errorf("inspect %s: %w", cid, err)
+	}
+	fields := strings.Fields(out)
+	if len(fields) == 0 {
+		return "", fmt.Errorf("no IP for container %s", cid)
+	}
+	return fields[0], nil
 }

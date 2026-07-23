@@ -41,14 +41,13 @@ func Preflight(ctx context.Context, conn connection.Connection, cfg *config.Conf
 // collision (issue #13). Best-effort: if compose config cannot be rendered or
 // parsed, it stays silent rather than blocking the deploy.
 func proxyPortCollision(ctx context.Context, conn connection.Connection, cfg *config.Config) []error {
-	anyProxy := false
-	for _, s := range cfg.Services {
+	var proxySvcs []string
+	for name, s := range cfg.Services {
 		if s.Cutover.Strategy == "proxy" {
-			anyProxy = true
-			break
+			proxySvcs = append(proxySvcs, name)
 		}
 	}
-	if !anyProxy {
+	if len(proxySvcs) == 0 {
 		return nil
 	}
 	out, err := conn.Run(ctx, fmt.Sprintf("docker compose -f %s config --format json", cfg.Compose))
@@ -75,10 +74,7 @@ func proxyPortCollision(ctx context.Context, conn connection.Connection, cfg *co
 		return set
 	}
 	var errs []error
-	for name, s := range cfg.Services {
-		if s.Cutover.Strategy != "proxy" {
-			continue
-		}
+	for _, name := range proxySvcs {
 		green := published(name + "-green")
 		for port := range published(name + "-blue") {
 			if green[port] {
