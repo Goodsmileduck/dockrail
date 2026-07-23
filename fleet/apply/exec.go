@@ -148,7 +148,7 @@ func (x *actionExec) probe(ctx context.Context, r fleet.Readiness, model, who st
 	if err != nil {
 		return fmt.Errorf("%s: readiness config: %w", who, err)
 	}
-	if err := prober.Probe(ctx, x.conn); err != nil {
+	if err := prober.Probe(ctx, x.conn, "localhost"); err != nil {
 		return fmt.Errorf("%s: readiness failed (container kept for inspection): %w", who, err)
 	}
 	return nil

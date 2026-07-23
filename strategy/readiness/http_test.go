@@ -31,10 +31,10 @@ func TestNewUnknownType(t *testing.T) {
 func TestHTTPProbeSuccess(t *testing.T) {
 	f := connection.NewFake()
 	h := &HTTP{Path: "/health", Port: 8010, Timeout: 5 * time.Second}
-	if err := h.Probe(context.Background(), f); err != nil {
+	if err := h.Probe(context.Background(), f, "10.0.0.5"); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(f.Commands[0], "curl") || !strings.Contains(f.Commands[0], "localhost:8010/health") {
+	if !strings.Contains(f.Commands[0], "curl") || !strings.Contains(f.Commands[0], "10.0.0.5:8010/health") {
 		t.Errorf("unexpected probe command: %v", f.Commands)
 	}
 }
@@ -43,7 +43,7 @@ func TestHTTPProbeTimesOut(t *testing.T) {
 	f := connection.NewFake()
 	f.Stub("curl", "", errors.New("connection refused"))
 	h := &HTTP{Path: "/health", Port: 8010, Timeout: 100 * time.Millisecond, retryEvery: 20 * time.Millisecond}
-	err := h.Probe(context.Background(), f)
+	err := h.Probe(context.Background(), f, "localhost")
 	if err == nil || !strings.Contains(err.Error(), "readiness") {
 		t.Fatalf("want readiness timeout error, got %v", err)
 	}

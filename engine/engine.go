@@ -257,7 +257,7 @@ func (e *Engine) recreate(ctx context.Context, name string, svc config.Service, 
 	}
 
 	e.logf("step readiness")
-	if err := prober.Probe(ctx, e.Conn); err != nil {
+	if err := prober.Probe(ctx, e.Conn, "localhost"); err != nil {
 		return "", err
 	}
 	e.logf("deployed %s tag %s", name, tag)

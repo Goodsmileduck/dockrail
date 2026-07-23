@@ -9,7 +9,7 @@ import (
 )
 
 type Prober interface {
-	Probe(ctx context.Context, conn connection.Connection) error
+	Probe(ctx context.Context, conn connection.Connection, host string) error
 }
 
 func New(r config.Readiness, model string) (Prober, error) {

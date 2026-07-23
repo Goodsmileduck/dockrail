@@ -27,8 +27,8 @@ func newHTTP(r config.Readiness) (*HTTP, error) {
 	return &HTTP{Path: r.Path, Port: r.Port, Timeout: timeout, retryEvery: 2 * time.Second}, nil
 }
 
-func (h *HTTP) Probe(ctx context.Context, conn connection.Connection) error {
-	cmd := fmt.Sprintf("curl -fsS -m 5 http://localhost:%d%s >/dev/null", h.Port, h.Path)
+func (h *HTTP) Probe(ctx context.Context, conn connection.Connection, host string) error {
+	cmd := fmt.Sprintf("curl -fsS -m 5 http://%s:%d%s >/dev/null", host, h.Port, h.Path)
 	deadline := time.Now().Add(h.Timeout)
 	var lastErr error
 	for time.Now().Before(deadline) {

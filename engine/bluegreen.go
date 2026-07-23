@@ -103,7 +103,7 @@ func (e *Engine) proxyCutover(ctx context.Context, name string, svc config.Servi
 		if _, err := e.Conn.Run(ctx, e.composeCmd(prefix, tag, gpu, "up -d --no-deps", greenSvc)); err != nil {
 			return "", fmt.Errorf("start green: %w", err)
 		}
-		if err := prober.Probe(ctx, e.Conn); err != nil {
+		if err := prober.Probe(ctx, e.Conn, "localhost"); err != nil {
 			// Auto-rollback: green never became ready and blue is down. Use
 			// `start`, not `up -d`, to restart blue's existing stopped container
 			// as-is — `up -d` would recreate it with the NEW TAG (the broken
@@ -124,7 +124,7 @@ func (e *Engine) proxyCutover(ctx context.Context, name string, svc config.Servi
 	if _, err := e.Conn.Run(ctx, e.composeCmd(prefix, tag, gpu, "up -d --no-deps", greenSvc)); err != nil {
 		return "", fmt.Errorf("start green: %w", err)
 	}
-	if err := prober.Probe(ctx, e.Conn); err != nil {
+	if err := prober.Probe(ctx, e.Conn, "localhost"); err != nil {
 		// Green failed but blue still serves; tear down green, leave blue.
 		_, _ = e.Conn.Run(ctx, e.composeCmd(prefix, tag, "", "stop", greenSvc))
 		return "", fmt.Errorf("green readiness failed (blue still serving): %w", err)
