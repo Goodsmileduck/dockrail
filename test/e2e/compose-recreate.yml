@@ -1,0 +1,9 @@
+networks:
+  default:
+    name: dockrail-e2e-net
+    external: true
+services:
+  web:
+    image: "${IMAGE:-dockrail-e2e-app}:${TAG:-v1}"
+    ports:
+      - "8080:8080"   # readiness.port published for `curl localhost:8080`
