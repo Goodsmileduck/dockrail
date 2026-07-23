@@ -7,7 +7,19 @@ source "$E2E_DIR/lib.sh"
 
 E2E_REGISTRY="dockrail-e2e-registry"
 
+# reset_state tears down every container/network the harness may have left
+# behind — so a fresh run starts clean and a scenario that aborts mid-way does
+# not poison the next run (the compose project is shared across scenarios).
+reset_state() {
+  for f in compose-proxy.yml compose-recreate.yml; do
+    runc "docker compose -f $E2E_DIR/$f down >/dev/null 2>&1" || true
+  done
+  runc "docker ps -aq --filter name=e2e-web | xargs -r docker rm -f >/dev/null 2>&1" || true
+  runc "docker rm -f $E2E_NGINX >/dev/null 2>&1" || true
+}
+
 cleanup() {
+  reset_state
   down_network
   if [ "${E2E_SKIP_BUILD:-0}" != "1" ]; then
     docker rm -f "$E2E_REGISTRY" >/dev/null 2>&1 || true
@@ -33,10 +45,12 @@ fi
 
 up_network
 trap cleanup EXIT
+reset_state   # clean any leftovers from a prior aborted run
 
 rc=0
 for name in "$@"; do
   echo "=== scenario: $name ==="
+  reset_state   # each scenario starts from a clean slate
   # shellcheck disable=SC1090
   source "$E2E_DIR/scenarios/$name.sh"
   # Run the scenario in a `set -e` subshell so a failed step (bad deploy, failed
