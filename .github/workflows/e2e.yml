@@ -43,8 +43,11 @@ jobs:
       packages: write            # push images to ghcr
     env:
       GOTOOLCHAIN: local
-      IMAGE: ghcr.io/${{ github.repository_owner }}/dockrail-e2e-app
     steps:
+      - name: Compute image ref
+        # ghcr repository names must be lowercase; the owner login may not be
+        # (e.g. "Goodsmileduck"), so downcase it before it lands in a tag.
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/dockrail-e2e-app" >> "$GITHUB_ENV"
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
         with: { go-version: "1.26.4", check-latest: false }
