@@ -1,0 +1,30 @@
+name: e2e-reap
+
+on:
+  schedule:
+    - cron: "17 * * * *"   # hourly; destroys leaked dockrail-ci droplets
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+      - name: Destroy dockrail-ci droplets older than 30m
+        run: |
+          set -euo pipefail
+          now=$(date -u +%s)
+          doctl compute droplet list --tag-name dockrail-ci \
+            --format ID,Name,Created --no-header | while read -r id name created; do
+            age=$(( now - $(date -u -d "$created" +%s) ))
+            if [ "$age" -gt 1800 ]; then
+              echo "reaping $name (age ${age}s)"
+              doctl compute droplet delete "$id" --force
+            fi
+          done
