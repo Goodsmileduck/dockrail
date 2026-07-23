@@ -9,10 +9,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: e2e-droplet
-  cancel-in-progress: false
-
 jobs:
   e2e-local:
     runs-on: ubuntu-latest
@@ -35,6 +31,12 @@ jobs:
   e2e-droplet:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    # Serialize ONLY droplet runs (a fixed group) so two dispatches can't race a
+    # droplet name; keep this off e2e-local so PR CI never queues behind a
+    # 25-minute droplet run.
+    concurrency:
+      group: e2e-droplet
+      cancel-in-progress: false
     timeout-minutes: 25          # hard cap so a hang cannot bill forever
     permissions:
       contents: read
@@ -81,6 +83,8 @@ jobs:
           SSH_TARGET: root@${{ steps.droplet.outputs.IP }}
           E2E_SKIP_BUILD: "1"       # images already pushed; droplet pulls them
           TARGET_DIR: /root/e2e     # where fixtures live ON THE DROPLET
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_ACTOR: ${{ github.actor }}
         run: |
           set -euo pipefail
           IP=${{ steps.droplet.outputs.IP }}
@@ -93,8 +97,9 @@ jobs:
           # droplet-side compose via a .env in the compose project dir.
           scp -r -o StrictHostKeyChecking=accept-new test/e2e "root@$IP:$TARGET_DIR"
           ssh "root@$IP" "printf 'IMAGE=%s\n' '$IMAGE' > $TARGET_DIR/.env"
-          # ghcr pull auth on the droplet:
-          ssh "root@$IP" "echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin"
+          # ghcr pull auth on the droplet — pipe the token over stdin so it never
+          # appears in a command line (ps) on the runner or the droplet.
+          printf '%s' "$GH_TOKEN" | ssh "root@$IP" "docker login ghcr.io -u '$GH_ACTOR' --password-stdin"
           test/e2e/run.sh recreate rollback forensics proxy
 
       - name: Destroy droplet

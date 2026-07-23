@@ -29,8 +29,10 @@ scenario_forensics() {
   echo "ok: audit shows a failed@ record"
 
   # The failed NEW container must be kept for inspection (not auto-removed).
-  runc "docker ps -a --filter name=web --format '{{.Names}}'" | grep -q web || {
-    echo "FAIL: failed NEW container was not kept for inspection"; rm -f "$dy"; return 1; }
+  # Match the :bad image specifically so we assert the FAILED container is kept,
+  # not merely that some "web" container lingers.
+  runc "docker ps -a --filter name=web --format '{{.Image}}'" | grep -q ':bad$' || {
+    echo "FAIL: failed NEW (:bad) container was not kept for inspection"; rm -f "$dy"; return 1; }
   echo "ok: failed NEW container kept for inspection"
 
   # OLD availability — a finding, not a gate (see NOTE above).

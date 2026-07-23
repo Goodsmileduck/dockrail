@@ -18,14 +18,22 @@ cmd_create() {
   local ip
   ip="$(doctl compute droplet get "$NAME" --format PublicIPv4 --no-header)"
   # Wait for sshd to accept the key (droplet "active" != ssh-ready).
+  local ready=""
   for _ in $(seq 1 30); do
     if ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 \
          "root@$ip" 'cloud-init status --wait >/dev/null 2>&1 || true; docker --version' >/dev/null 2>&1; then
-      echo "IP=$ip"; return 0
+      ready=1; break
     fi
     sleep 5
   done
-  echo "ERROR: droplet $NAME never became ssh-ready" >&2; return 1
+  [ -n "$ready" ] || { echo "ERROR: droplet $NAME never became ssh-ready" >&2; return 1; }
+  # dockrail requires the docker compose v2 PLUGIN (`docker compose`, no dash).
+  # The DO marketplace image may only ship the classic `docker-compose` binary,
+  # which would fail dockrail preflight — install the plugin if it is absent.
+  ssh -o StrictHostKeyChecking=accept-new "root@$ip" \
+    'docker compose version >/dev/null 2>&1 || { apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y docker-compose-plugin; }' \
+    >/dev/null 2>&1 || { echo "ERROR: could not ensure docker compose plugin on $NAME" >&2; return 1; }
+  echo "IP=$ip"; return 0
 }
 
 cmd_destroy() {
