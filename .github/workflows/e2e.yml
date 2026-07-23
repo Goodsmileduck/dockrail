@@ -77,6 +77,9 @@ jobs:
         id: droplet
         env:
           DIGITALOCEAN_ACCESS_TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+          # ssh-agent isn't loaded until the next step, so the ssh-ready probe
+          # in droplet.sh needs the private key by path.
+          SSH_KEY: /tmp/e2e_key
         # pipefail so a failed create fails the step instead of tee masking it
         # (an empty IP would otherwise slip through to the SSH step).
         run: set -o pipefail; test/e2e/droplet.sh create | tee -a "$GITHUB_OUTPUT"
