@@ -9,9 +9,14 @@ SIZE="${DO_SIZE:-s-1vcpu-1gb}"
 IMAGE="${DO_IMAGE:-docker-20-04}"   # Marketplace image with Docker preinstalled
 
 cmd_create() {
-  local keyfp
-  keyfp="$(doctl compute ssh-key import "$NAME" --public-key "$E2E_PUBKEY" \
+  local keyfp keyfile
+  # doctl dropped --public-key (string) in favour of --public-key-file, so land
+  # the key in a temp file the import can read.
+  keyfile="$(mktemp)"
+  printf '%s\n' "$E2E_PUBKEY" > "$keyfile"
+  keyfp="$(doctl compute ssh-key import "$NAME" --public-key-file "$keyfile" \
              --output json | python3 -c 'import json,sys;print(json.load(sys.stdin)[0]["fingerprint"])')"
+  rm -f "$keyfile"
   doctl compute droplet create "$NAME" \
     --region "$REGION" --size "$SIZE" --image "$IMAGE" \
     --ssh-keys "$keyfp" --tag-name dockrail-ci --wait >/dev/null

@@ -77,7 +77,9 @@ jobs:
         id: droplet
         env:
           DIGITALOCEAN_ACCESS_TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
-        run: test/e2e/droplet.sh create | tee -a "$GITHUB_OUTPUT"
+        # pipefail so a failed create fails the step instead of tee masking it
+        # (an empty IP would otherwise slip through to the SSH step).
+        run: set -o pipefail; test/e2e/droplet.sh create | tee -a "$GITHUB_OUTPUT"
 
       - name: Run e2e over SSH
         env:
