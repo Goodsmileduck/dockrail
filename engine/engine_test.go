@@ -292,6 +292,8 @@ func TestDeployProxyStrategyRoutesCutover(t *testing.T) {
 	f.Stub("history.jsonl", cannedHistory, nil)
 	f.Stub("query-gpu", "0, 2000\n1, 40960\n", nil)
 	f.Stub("ps -q web-blue", "cid-blue\n", nil)
+	f.Stub("ps -q web-green", "cid-green\n", nil)
+	f.Stub("NetworkSettings.Networks", "10.1.2.3\n", nil)
 	if err := e.Deploy(context.Background()); err != nil {
 		t.Fatalf("deploy: %v", err)
 	}

@@ -39,6 +39,8 @@ func TestProxyCutoverFreeSlotIsZeroGap(t *testing.T) {
 	f := connection.NewFake()
 	f.Stub("query-gpu", "0, 2000\n1, 40960\n", nil) // GPU1 free
 	f.Stub("ps -q web-blue", "cid-blue\n", nil)     // blue active
+	f.Stub("ps -q web-green", "cid-green\n", nil)
+	f.Stub("NetworkSettings.Networks", "10.1.2.3\n", nil)
 	e := &Engine{Conn: f, Cfg: bgCfg(), Out: discard()}
 	if _, err := e.proxyCutover(context.Background(), "web", bgService(), "v2", ""); err != nil {
 		t.Fatalf("cutover: %v", err)
@@ -53,6 +55,9 @@ func TestProxyCutoverFreeSlotIsZeroGap(t *testing.T) {
 	if strings.Contains(all, "DOCKRAIL_GPU=1") == false {
 		t.Fatalf("green must be pinned to the free GPU:\n%s", all)
 	}
+	if !strings.Contains(all, "10.1.2.3:8000/health") {
+		t.Fatalf("green must be probed at its container IP:\n%s", all)
+	}
 }
 
 // No free slot + stop-old-first -> blue stopped, green up, flip. Gap accepted.
@@ -60,6 +65,8 @@ func TestProxyCutoverStopOldFirst(t *testing.T) {
 	f := connection.NewFake()
 	f.Stub("query-gpu", "0, 1000\n1, 1000\n", nil) // none free
 	f.Stub("ps -q web-blue", "cid-blue\n", nil)
+	f.Stub("ps -q web-green", "cid-green\n", nil)
+	f.Stub("NetworkSettings.Networks", "10.1.2.3\n", nil)
 	e := &Engine{Conn: f, Cfg: bgCfg(), Out: discard()}
 	if _, err := e.proxyCutover(context.Background(), "web", bgService(), "v2", ""); err != nil {
 		t.Fatalf("cutover: %v", err)
@@ -96,6 +103,8 @@ func TestProxyCutoverAutoRollback(t *testing.T) {
 	f := connection.NewFake()
 	f.Stub("query-gpu", "0, 1000\n", nil)
 	f.Stub("ps -q web-blue", "cid-blue\n", nil)
+	f.Stub("ps -q web-green", "cid-green\n", nil)
+	f.Stub("NetworkSettings.Networks", "10.1.2.3\n", nil)
 	f.Stub("curl", "", errors.New("green not ready")) // readiness fails
 	svc := bgService()
 	svc.Placement.Pool = []int{0}
