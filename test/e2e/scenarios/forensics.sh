@@ -13,11 +13,11 @@ scenario_forensics() {
   local dy; dy="$(mktemp)"
   local app="http://localhost:${APP_PORT}"
 
-  gen_deploy_yml "$dy" "$ns" "$E2E_DIR/compose-recreate.yml" recreate v1
+  gen_deploy_yml "$dy" "$ns" "$TARGET_DIR/compose-recreate.yml" recreate v1
   "$DOCKRAIL" -c "$dy" deploy
   assert_version "$app/version" v1
 
-  gen_deploy_yml "$dy" "$ns" "$E2E_DIR/compose-recreate.yml" recreate bad
+  gen_deploy_yml "$dy" "$ns" "$TARGET_DIR/compose-recreate.yml" recreate bad
   if "$DOCKRAIL" -c "$dy" deploy; then
     echo "FAIL: bad deploy unexpectedly succeeded"; rm -f "$dy"; return 1
   fi
@@ -34,13 +34,13 @@ scenario_forensics() {
   echo "ok: failed NEW container kept for inspection"
 
   # OLD availability — a finding, not a gate (see NOTE above).
-  if curl -fsS -m 5 "$app/health" >/dev/null 2>&1 && [ "$(curl -fsS -m 5 "$app/version")" = "v1" ]; then
+  if target_curl_ok "$app/health" && [ "$(target_curl "$app/version" 2>/dev/null || true)" = "v1" ]; then
     echo "note: OLD (v1) still served after failed recreate"
   else
     echo "note: FINDING — failed recreate left OLD down (downtime window); file a dockrail issue"
   fi
 
-  TAG=bad docker compose -f "$E2E_DIR/compose-recreate.yml" down >/dev/null 2>&1 || true
+  runc "TAG=bad docker compose -f $TARGET_DIR/compose-recreate.yml down >/dev/null 2>&1" || true
   rm -f "$dy"
   echo "PASS scenario_forensics"
 }

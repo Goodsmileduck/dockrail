@@ -11,6 +11,13 @@ E2E_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 CONN="${CONN:-local}"
 
+# TARGET_DIR is where the compose files + fixture live ON THE DEPLOY TARGET.
+# For local exec that is this repo dir; for the droplet tier the workflow syncs
+# them to a droplet path and sets TARGET_DIR to it. dockrail runs
+# `docker compose -f <compose>` on the target, and the nginx fixture bind-mounts
+# from here, so these paths must resolve on the target, not the runner.
+TARGET_DIR="${TARGET_DIR:-$E2E_DIR}"
+
 # runc runs a command on the deploy target. Local exec mirrors what dockrail
 # itself does; ssh mirrors the real transport.
 runc() {
@@ -41,7 +48,7 @@ up_fixture() {
   runc "docker rm -f $E2E_NGINX >/dev/null 2>&1 || true"
   runc "docker run -d --name $E2E_NGINX --network $E2E_NET -p $E2E_PORT:80 \
           -v \$HOME/.dockrail/$project/nginx:/etc/nginx/dockrail:ro \
-          -v $E2E_DIR/fixture/nginx.conf:/etc/nginx/nginx.conf:ro \
+          -v $TARGET_DIR/fixture/nginx.conf:/etc/nginx/nginx.conf:ro \
           nginx:1.27-alpine"
 }
 
@@ -69,16 +76,24 @@ gen_deploy_yml() {
   } > "$file"
 }
 
+# target_curl runs curl ON THE DEPLOY TARGET, so probes hit the host where the
+# app/nginx ports are actually published (the droplet under CONN=ssh, the runner
+# under CONN=local) — the published ports live on the target's localhost.
+target_curl() { runc "curl -fsS -m 5 '$1'"; }
+
+# target_curl_ok reports success/failure of a target-side curl without output.
+target_curl_ok() { runc "curl -fsS -m 5 '$1' >/dev/null 2>&1"; }
+
 assert_version() {
   local url="$1" want="$2" got
-  got="$(curl -fsS -m 5 "$url")" || { echo "FAIL: $url unreachable"; return 1; }
+  got="$(target_curl "$url")" || { echo "FAIL: $url unreachable"; return 1; }
   [ "$got" = "$want" ] || { echo "FAIL: $url version=$got want=$want"; return 1; }
   echo "ok: $url == $want"
 }
 
 assert_no_health() {
   local url="$1"
-  if curl -fsS -m 5 "$url" >/dev/null 2>&1; then
+  if target_curl_ok "$url"; then
     echo "FAIL: $url unexpectedly served /health"; return 1
   fi
   echo "ok: $url has no /health"

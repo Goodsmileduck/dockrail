@@ -12,7 +12,7 @@ E2E_REGISTRY="dockrail-e2e-registry"
 # not poison the next run (the compose project is shared across scenarios).
 reset_state() {
   for f in compose-proxy.yml compose-recreate.yml; do
-    runc "docker compose -f $E2E_DIR/$f down >/dev/null 2>&1" || true
+    runc "docker compose -f $TARGET_DIR/$f down >/dev/null 2>&1" || true
   done
   runc "docker ps -aq --filter name=e2e-web | xargs -r docker rm -f >/dev/null 2>&1" || true
   runc "docker rm -f $E2E_NGINX >/dev/null 2>&1" || true

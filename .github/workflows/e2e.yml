@@ -4,9 +4,14 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: e2e-droplet
+  cancel-in-progress: false
 
 jobs:
   e2e-local:
@@ -26,3 +31,74 @@ jobs:
           DOCKRAIL: /tmp/dockrail
           CONN: local
         run: test/e2e/run.sh recreate rollback forensics proxy
+
+  e2e-droplet:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25          # hard cap so a hang cannot bill forever
+    permissions:
+      contents: read
+      packages: write            # push images to ghcr
+    env:
+      GOTOOLCHAIN: local
+      IMAGE: ghcr.io/${{ github.repository_owner }}/dockrail-e2e-app
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with: { go-version: "1.26.4", check-latest: false }
+      - name: Build dockrail
+        run: go build -o /tmp/dockrail .
+
+      - name: Log in to ghcr
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build + push app images
+        run: |
+          test/e2e/build-images.sh "$IMAGE"
+          for t in v1 v2 bad; do docker push "$IMAGE:$t"; done
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+      - name: Generate ephemeral SSH key
+        run: |
+          ssh-keygen -t ed25519 -N '' -f /tmp/e2e_key
+          echo "E2E_PUBKEY=$(cat /tmp/e2e_key.pub)" >> "$GITHUB_ENV"
+      - name: Create droplet
+        id: droplet
+        env:
+          DIGITALOCEAN_ACCESS_TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+        run: test/e2e/droplet.sh create | tee -a "$GITHUB_OUTPUT"
+
+      - name: Run e2e over SSH
+        env:
+          DOCKRAIL: /tmp/dockrail
+          CONN: ssh
+          SSH_TARGET: root@${{ steps.droplet.outputs.IP }}
+          E2E_SKIP_BUILD: "1"       # images already pushed; droplet pulls them
+          TARGET_DIR: /root/e2e     # where fixtures live ON THE DROPLET
+        run: |
+          set -euo pipefail
+          IP=${{ steps.droplet.outputs.IP }}
+          eval "$(ssh-agent -s)"; ssh-add /tmp/e2e_key
+          # dockrail's own SSH uses BatchMode with no host-key override, so seed
+          # known_hosts up front (runc uses accept-new, but dockrail does not).
+          mkdir -p ~/.ssh && ssh-keyscan -H "$IP" >> ~/.ssh/known_hosts 2>/dev/null
+          # Sync the compose files + nginx fixture to the droplet (dockrail runs
+          # `docker compose -f $TARGET_DIR/...` there) and provide IMAGE to the
+          # droplet-side compose via a .env in the compose project dir.
+          scp -r -o StrictHostKeyChecking=accept-new test/e2e "root@$IP:$TARGET_DIR"
+          ssh "root@$IP" "printf 'IMAGE=%s\n' '$IMAGE' > $TARGET_DIR/.env"
+          # ghcr pull auth on the droplet:
+          ssh "root@$IP" "echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin"
+          test/e2e/run.sh recreate rollback forensics proxy
+
+      - name: Destroy droplet
+        if: always()
+        env:
+          DIGITALOCEAN_ACCESS_TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+        run: test/e2e/droplet.sh destroy
