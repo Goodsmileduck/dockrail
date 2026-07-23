@@ -1,10 +1,12 @@
 package plan
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/goodsmileduck/dockrail/fleet"
 	"github.com/goodsmileduck/dockrail/fleet/observe"
+	"github.com/goodsmileduck/dockrail/fleet/override"
 )
 
 func backendCfg(replicas int, tag string) *fleet.Config {
@@ -270,6 +272,107 @@ func TestCompute_BackendRemovedEntirely(t *testing.T) {
 	}
 	if rm == nil || rm.Replica != 0 {
 		t.Fatalf("want remove old/0, got %+v", actionsOf(p))
+	}
+}
+
+func TestCompute_HashDrift_EmitsUpdate(t *testing.T) {
+	// Placement, gpu, replica, and tag all match desired, but the observed
+	// dockrail.config-hash label is stale (e.g. compose template changed
+	// underneath the same tag) -> still expect an update.
+	cfg := backendCfg(1, "v2")
+	c := rep("llama", 0, 0, "reg/llama:v2")
+	c.Labels[observe.LabelConfigHash] = "sha256:stale"
+	st := observe.FleetState{Hosts: []observe.HostState{
+		hostWith("h", map[int]int{0: 12288}, []observe.Container{c}),
+	}}
+	p, err := Compute(cfg, st)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	as := actionsOf(p)
+	if len(as) != 1 || as[0].Kind != UpdateReplica || as[0].Backend != "llama" || as[0].Replica != 0 || as[0].Tag != "v2" {
+		t.Fatalf("want hash-drift update for llama/0, got %+v", as)
+	}
+	if as[0].OldTag != "v2" || as[0].Host != "h" || as[0].GPU != 0 {
+		t.Fatalf("want OldTag=v2 Host=h GPU=0 (unchanged placement, hash-only drift), got %+v", as[0])
+	}
+}
+
+// TestCompute_ReplicaOverrideRoundTrip_NoAction renders a replica override
+// with override.Replica (the real code path apply uses), extracts the
+// dockrail.config-hash label from the rendered body — not the returned hash
+// value — and builds an observed container carrying that label. This proves
+// plan and override agree via the exported ReplicaHash, not just that two
+// calls to the same helper produce equal strings.
+func TestCompute_ReplicaOverrideRoundTrip_NoAction(t *testing.T) {
+	cfg := backendCfg(1, "v2")
+	tmpl := cfg.Backends["llama"].Service
+	body := override.Replica(cfg.Compose, tmpl, "llama", 0, 0, "v2")
+	label := extractConfigHashLabel(t, body)
+	if want := override.ReplicaHash(cfg.Compose, tmpl, "llama", 0, 0, "v2"); label != want {
+		t.Fatalf("rendered config-hash label %q != ReplicaHash %q", label, want)
+	}
+	c := rep("llama", 0, 0, "reg/llama:v2")
+	c.Labels[observe.LabelConfigHash] = label
+	st := observe.FleetState{Hosts: []observe.HostState{
+		hostWith("h", map[int]int{0: 12288}, []observe.Container{c}),
+	}}
+	p, err := Compute(cfg, st)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	if len(actionsOf(p)) != 0 {
+		t.Fatalf("expected no action, got %+v", actionsOf(p))
+	}
+}
+
+// extractConfigHashLabel pulls the dockrail.config-hash value out of a
+// rendered override body (the "key: \"value\"" line), mimicking what the
+// Observer would read off the running container's labels.
+func extractConfigHashLabel(t *testing.T, body string) string {
+	t.Helper()
+	prefix := observe.LabelConfigHash + ":"
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, prefix) {
+			return strings.Trim(strings.TrimSpace(strings.TrimPrefix(line, prefix)), `"`)
+		}
+	}
+	t.Fatalf("config-hash label not found in rendered body:\n%s", body)
+	return ""
+}
+
+func TestCompute_HashMatch_NoAction(t *testing.T) {
+	cfg := backendCfg(1, "v2")
+	tmpl := cfg.Backends["llama"].Service
+	hash := override.ReplicaHash(cfg.Compose, tmpl, "llama", 0, 0, "v2")
+	c := rep("llama", 0, 0, "reg/llama:v2")
+	c.Labels[observe.LabelConfigHash] = hash
+	st := observe.FleetState{Hosts: []observe.HostState{
+		hostWith("h", map[int]int{0: 12288}, []observe.Container{c}),
+	}}
+	p, err := Compute(cfg, st)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	if len(actionsOf(p)) != 0 {
+		t.Fatalf("expected no action on hash match, got %+v", actionsOf(p))
+	}
+}
+
+func TestCompute_MissingHashLabel_NoAction(t *testing.T) {
+	// Back-compat: a replica deployed before this change carries no
+	// config-hash label at all -> must not trigger a spurious update.
+	cfg := backendCfg(1, "v2")
+	st := observe.FleetState{Hosts: []observe.HostState{
+		hostWith("h", map[int]int{0: 12288}, []observe.Container{rep("llama", 0, 0, "reg/llama:v2")}),
+	}}
+	p, err := Compute(cfg, st)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	if len(actionsOf(p)) != 0 {
+		t.Fatalf("expected no action for missing hash label (back-compat), got %+v", actionsOf(p))
 	}
 }
 

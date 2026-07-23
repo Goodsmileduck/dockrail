@@ -16,7 +16,7 @@ import (
 // Do NOT rebuild this with "\t" concatenation: that inserts real tab bytes and
 // breaks the TestPSQuery_TemplateSurvivesShell guard (which checks for a literal
 // backslash-t) as well as docker template consistency.
-const psQuery = `docker ps --format '{{.Names}}\t{{.Image}}\t{{.Label "dockrail.managed"}}\t{{.Label "dockrail.backend"}}\t{{.Label "dockrail.replica"}}\t{{.Label "dockrail.gpu"}}\t{{.Label "dockrail.service"}}'`
+const psQuery = `docker ps --format '{{.Names}}\t{{.Image}}\t{{.Label "dockrail.managed"}}\t{{.Label "dockrail.backend"}}\t{{.Label "dockrail.replica"}}\t{{.Label "dockrail.gpu"}}\t{{.Label "dockrail.service"}}\t{{.Label "dockrail.config-hash"}}'`
 
 // dockrail container labels: self-describing identity the Planner diffs on.
 const (
@@ -25,10 +25,15 @@ const (
 	LabelReplica = "dockrail.replica"
 	LabelGPU     = "dockrail.gpu"
 	LabelService = "dockrail.service"
+
+	// LabelConfigHash is stamped by fleet/override onto generated overrides;
+	// the Planner diffs it against the desired hash (Task 4 wires the
+	// psQuery column that surfaces it from `docker ps`).
+	LabelConfigHash = "dockrail.config-hash"
 )
 
 // labelCols maps the trailing psQuery columns (after name, image) to label keys.
-var labelCols = []string{LabelManaged, LabelBackend, LabelReplica, LabelGPU, LabelService}
+var labelCols = []string{LabelManaged, LabelBackend, LabelReplica, LabelGPU, LabelService, LabelConfigHash}
 
 var errNilConfig = errors.New("observe: nil config")
 

@@ -101,3 +101,31 @@ func TestParseContainers_Labels(t *testing.T) {
 		t.Fatalf("unlabeled wrong: %+v", cs[2])
 	}
 }
+
+func TestParseContainers_ConfigHash(t *testing.T) {
+	// Columns: name, image, managed, backend, replica, gpu, service, config-hash (tab-sep).
+	out := "chat-api\treg/chat:v2\ttrue\t\t\t\tchat-api\tabc123\n"
+	cs := parseContainers(out)
+	if len(cs) != 1 {
+		t.Fatalf("want 1, got %d", len(cs))
+	}
+	if cs[0].Labels[LabelConfigHash] != "abc123" {
+		t.Fatalf("config-hash label wrong: %+v", cs[0].Labels)
+	}
+}
+
+func TestParseContainers_ShortLineBackwardTolerance(t *testing.T) {
+	// Older 7-column lines (containers deployed before config-hash column
+	// existed) must still parse without the config-hash label.
+	out := "chat-api\treg/chat:v2\ttrue\t\t\t\tchat-api\n"
+	cs := parseContainers(out)
+	if len(cs) != 1 {
+		t.Fatalf("want 1, got %d", len(cs))
+	}
+	if cs[0].Labels[LabelService] != "chat-api" {
+		t.Fatalf("service label wrong: %+v", cs[0].Labels)
+	}
+	if _, ok := cs[0].Labels[LabelConfigHash]; ok {
+		t.Fatalf("config-hash should be absent on short line: %+v", cs[0].Labels)
+	}
+}

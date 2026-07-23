@@ -10,6 +10,7 @@ import (
 
 	"github.com/goodsmileduck/dockrail/config"
 	"github.com/goodsmileduck/dockrail/connection"
+	"github.com/goodsmileduck/dockrail/secrets"
 	"github.com/goodsmileduck/dockrail/strategy/readiness"
 )
 
@@ -20,6 +21,13 @@ type Engine struct {
 	// LockWait is how long Deploy/Rollback wait for the deploy lock before
 	// giving up. Zero = fail fast (the default).
 	LockWait time.Duration
+	// Force bypasses the no-op skip in Deploy: it redeploys even when the
+	// config hash matches the last successful deploy.
+	Force bool
+	// configHash is the digest computed by Deploy for the record it is about
+	// to write. Rollback/RollbackTo never set it, so their records carry no
+	// hash and a subsequent Deploy never skips after a rollback.
+	configHash string
 }
 
 // safeTag guards image tags before they are interpolated into a host shell
@@ -51,6 +59,17 @@ func (e *Engine) Deploy(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
+	hash, err := e.desiredHash(ctx)
+	if err != nil {
+		return err
+	}
+	if e.shouldSkip(h, hash) {
+		e.logf("no changes since last deploy (config hash match); skipping — use --force to redeploy")
+		return nil
+	}
+	e.configHash = hash
+
 	return e.runServices(ctx, func(svc config.Service) string { return svc.ImageTag }, "", "deploy", "deployed", h)
 }
 
@@ -61,11 +80,15 @@ func (e *Engine) Deploy(ctx context.Context) error {
 // record's outcome. h is the pre-append history, threaded into finalize so it
 // need not re-read the file. The caller holds the deploy lock.
 func (e *Engine) runServices(ctx context.Context, tagFor func(config.Service) string, failTag, step, outcome string, h []Record) error {
-	secrets, err := collectSecrets(e.Cfg.Secrets.FromEnv)
+	prov, err := secrets.New(e.Cfg.Secrets.Provider)
 	if err != nil {
 		return e.recordFailure(ctx, failTag, "secrets", err)
 	}
-	prefix, err := writeSecretsFile(ctx, e.Conn, e.Cfg.Project, secrets)
+	vals, err := prov.Fetch(ctx, e.Cfg.Secrets.FromEnv)
+	if err != nil {
+		return e.recordFailure(ctx, failTag, "secrets", err)
+	}
+	prefix, err := writeSecretsFile(ctx, e.Conn, e.Cfg.Project, vals)
 	if err != nil {
 		return e.recordFailure(ctx, failTag, "secrets", err)
 	}
@@ -264,7 +287,7 @@ func (e *Engine) finalize(ctx context.Context, tag, outcome string, ids map[stri
 	// copy only; retention (retainedTags/success) reads Tag and Outcome only,
 	// so the in-memory rec below is sufficient. Any future time-based retention
 	// must not trust TS on this local copy.
-	rec := Record{Tag: tag, Outcome: outcome, Services: ids}
+	rec := Record{Tag: tag, Outcome: outcome, Services: ids, ConfigHash: e.configHash}
 	if err := appendRecord(ctx, e.Conn, e.Cfg.Project, rec); err != nil {
 		return err
 	}

@@ -25,10 +25,12 @@ Or grab a prebuilt binary from the [Releases](../../releases) page.
 ## Usage
 
 ```bash
-dockrail check              # validate config + probe target host readiness
+dockrail check              # validate config + compose file + probe target host readiness
+dockrail check --images     # also report tag-vs-registry digest drift (read-only)
 dockrail deploy --dry-run   # print the plan without mutating the host
 dockrail deploy             # pull, recreate, wait for readiness, cut over
 dockrail deploy --lock-wait 5m # wait for a concurrent deploy's lock instead of failing
+dockrail deploy --force      # redeploy even if nothing changed since last deploy
 dockrail rollback           # restore the previously deployed image tag
 dockrail status             # show deployed + running tag per service
 dockrail status --json      # same, as machine-readable JSON (for agents/scripts)
@@ -70,6 +72,12 @@ services:
 
 Host deploy state (previous/current tag, last failure) lives on the target in
 `~/.dockrail/<project>/state.json`, guarded by a per-project deploy lock.
+
+`deploy` skips when nothing changed since the last successful deploy (compose
+file on target + deploy.yml service config + tag, recorded as `config_hash` in
+history); secret-only changes need `--force`. The skip is history-based and
+does not verify the containers are actually running; `--force` redeploys
+regardless.
 
 ## Readiness
 
@@ -146,6 +154,21 @@ runs `docker login` on the target before pulling images; if either is missing,
 it skips login and assumes the host is already authenticated. Secret values are
 written to the target env-file or login pipe, but are not passed as command
 arguments to later compose commands or `docker login`.
+
+Setting `secrets.provider: infisical` in `deploy.yml` switches where the
+`secrets.from_env`-listed names are fetched *from*, without changing how
+they're delivered to the host: `dockrail` authenticates to Infisical with a
+machine identity (universal auth) and fetches secrets over its REST API using
+stdlib `net/http` only — no SDK dependency, keeping the single static-binary
+guarantee (D1). Configure it via dockrail's own environment, never
+`deploy.yml`: `INFISICAL_CLIENT_ID`, `INFISICAL_CLIENT_SECRET`,
+`INFISICAL_PROJECT_ID`, `INFISICAL_ENVIRONMENT` (all required), and
+optionally `INFISICAL_SITE_URL` (default `https://app.infisical.com`) and
+`INFISICAL_SECRET_PATH` (default `/`; accepts comma-separated paths, e.g.
+`/,/apps` — later paths win on key collision). Delivery to the host is
+unchanged: values still land in the mode-600 env-file. A Bitwarden provider is
+deferred — its official Go SDK is cgo-backed and conflicts with D1's static
+binary; revisit if a pure-Go client becomes available.
 
 ## Docs
 

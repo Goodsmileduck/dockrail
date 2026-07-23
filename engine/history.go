@@ -15,11 +15,12 @@ import (
 // target host. Outcome is "deployed", "failed@<step>", or "rolled-back"
 // (whose Tag is the tag restored).
 type Record struct {
-	TS        string            `json:"ts"`
-	Tag       string            `json:"tag"`
-	Services  map[string]string `json:"services,omitempty"`
-	Performer string            `json:"performer"`
-	Outcome   string            `json:"outcome"`
+	TS         string            `json:"ts"`
+	Tag        string            `json:"tag"`
+	Services   map[string]string `json:"services,omitempty"`
+	Performer  string            `json:"performer"`
+	Outcome    string            `json:"outcome"`
+	ConfigHash string            `json:"config_hash,omitempty"`
 }
 
 // projectDir is the per-project state directory on the target host that holds

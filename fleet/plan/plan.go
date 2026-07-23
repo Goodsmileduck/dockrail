@@ -12,6 +12,7 @@ import (
 
 	"github.com/goodsmileduck/dockrail/fleet"
 	"github.com/goodsmileduck/dockrail/fleet/observe"
+	"github.com/goodsmileduck/dockrail/fleet/override"
 	"github.com/goodsmileduck/dockrail/fleet/schedule"
 )
 
@@ -70,6 +71,13 @@ type obsReplica struct {
 	host string
 	gpu  int
 	tag  string
+	hash string // observed dockrail.config-hash label; "" if absent (pre-upgrade container)
+}
+
+// obsService is an observed managed routed service.
+type obsService struct {
+	tag  string
+	hash string // observed dockrail.config-hash label; "" if absent (pre-upgrade container)
 }
 
 func tagOf(image string) string {
@@ -96,7 +104,7 @@ func Compute(cfg *fleet.Config, observed observe.FleetState) (Plan, error) {
 
 	// Index observed managed backend replicas and service tags.
 	obs := map[string]map[int]obsReplica{}
-	obsSvc := map[string]string{}
+	obsSvc := map[string]obsService{}
 	for _, h := range observed.Hosts {
 		for _, c := range h.Containers {
 			if c.Labels[observe.LabelManaged] != "true" {
@@ -111,9 +119,9 @@ func Compute(cfg *fleet.Config, observed observe.FleetState) (Plan, error) {
 				if obs[b] == nil {
 					obs[b] = map[int]obsReplica{}
 				}
-				obs[b][r] = obsReplica{host: h.Name, gpu: g, tag: tagOf(c.Image)}
+				obs[b][r] = obsReplica{host: h.Name, gpu: g, tag: tagOf(c.Image), hash: c.Labels[observe.LabelConfigHash]}
 			} else if s := c.Labels[observe.LabelService]; s != "" {
-				obsSvc[s] = tagOf(c.Image)
+				obsSvc[s] = obsService{tag: tagOf(c.Image), hash: c.Labels[observe.LabelConfigHash]}
 			}
 		}
 	}
@@ -156,7 +164,14 @@ func Compute(cfg *fleet.Config, observed observe.FleetState) (Plan, error) {
 				continue // missing — placed below
 			}
 			kept[name] = append(kept[name], schedule.Assignment{Replica: r, Host: o.host, GPU: o.gpu})
-			if o.tag != b.ImageTag {
+			// Update on a tag change, or — with the right tag — when the
+			// override content that produced this container has drifted
+			// (e.g. template change). An absent/empty hash label
+			// (pre-upgrade container) is treated as matching so upgrading
+			// dockrail itself doesn't trigger a fleet-wide redeploy; the
+			// hash gets stamped at the next real change.
+			if o.tag != b.ImageTag ||
+				(o.hash != "" && o.hash != override.ReplicaHash(cfg.Compose, b.Service, name, r, o.gpu, b.ImageTag)) {
 				converge = append(converge, Action{Kind: UpdateReplica, Backend: name, Replica: r,
 					Host: o.host, GPU: o.gpu, Tag: b.ImageTag, OldTag: o.tag})
 				changed[name] = true
@@ -227,8 +242,11 @@ func Compute(cfg *fleet.Config, observed observe.FleetState) (Plan, error) {
 		if cur, ok := obsSvc[name]; !ok {
 			converge = append(converge, Action{Kind: DeployService, Service: name, Host: s.Host, Tag: s.ImageTag})
 			svcChanged = true
-		} else if cur != s.ImageTag {
-			converge = append(converge, Action{Kind: UpdateService, Service: name, Host: s.Host, Tag: s.ImageTag, OldTag: cur})
+		} else if cur.tag != s.ImageTag ||
+			(cur.hash != "" && cur.hash != override.ServiceHash(cfg.Compose, s.Service, name, s.ImageTag)) {
+			// Tag change, or hash drift with the same back-compat rule as
+			// the replica branch above.
+			converge = append(converge, Action{Kind: UpdateService, Service: name, Host: s.Host, Tag: s.ImageTag, OldTag: cur.tag})
 			svcChanged = true
 		}
 		for _, u := range s.Uses {

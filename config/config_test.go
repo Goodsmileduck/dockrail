@@ -50,6 +50,7 @@ func TestLoadInvalid(t *testing.T) {
 		{"bad timeout", strings.Replace(validYAML, "timeout: 90s", "timeout: soon", 1), "timeout"},
 		{"gpu needs pool", validYAML + "    placement: { type: gpu, vram_min: 20GiB }\n", "pool"},
 		{"bad on_no_free_gpu", validYAML + "    placement: { type: gpu, pool: [0], vram_min: 20GiB, on_no_free_gpu: retry }\n", "on_no_free_gpu"},
+		{"bad secrets provider", validYAML + "secrets: { provider: bogus }\n", "secrets.provider"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -76,5 +77,16 @@ func TestRetainContainersRejectsNegative(t *testing.T) {
 	_, err := Load(write(t, yaml))
 	if err == nil || !strings.Contains(err.Error(), "retain_containers") {
 		t.Fatalf("want retain_containers error, got %v", err)
+	}
+}
+
+func TestLoadSecretsProviderInfisicalParses(t *testing.T) {
+	yaml := validYAML + "secrets: { provider: infisical }\n"
+	cfg, err := Load(write(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Secrets.Provider != "infisical" {
+		t.Fatalf("provider = %q, want infisical", cfg.Secrets.Provider)
 	}
 }

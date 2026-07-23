@@ -1,3 +1,5 @@
+// Package apply executes a Planner plan across the fleet via generated
+// per-replica compose overrides, health-gated per the fleet serving invariant.
 package apply
 
 import (
@@ -10,6 +12,7 @@ import (
 	"github.com/goodsmileduck/dockrail/config"
 	"github.com/goodsmileduck/dockrail/connection"
 	"github.com/goodsmileduck/dockrail/fleet"
+	"github.com/goodsmileduck/dockrail/fleet/override"
 	plan "github.com/goodsmileduck/dockrail/fleet/plan"
 	"github.com/goodsmileduck/dockrail/strategy/readiness"
 )
@@ -67,7 +70,8 @@ func (x *actionExec) place(ctx context.Context, a plan.Action) error {
 	}
 	name := fmt.Sprintf("%s-%d", a.Backend, a.Replica)
 	ov := x.overridePath(name)
-	if err := x.writeFile(ctx, ov, replicaOverride(x.baseName(), b.Service, a.Backend, a.Replica, a.GPU)); err != nil {
+	body := override.Replica(x.baseName(), b.Service, a.Backend, a.Replica, a.GPU, a.Tag)
+	if err := x.writeFile(ctx, ov, body); err != nil {
 		return fmt.Errorf("place %s: write override: %w", name, err)
 	}
 	x.logf("place %s on %s:%d (%s)", name, a.Host, a.GPU, a.Tag)
@@ -99,7 +103,8 @@ func (x *actionExec) deployService(ctx context.Context, a plan.Action) error {
 		return fmt.Errorf("deploy %s: unsafe tag %q", a.Service, a.Tag)
 	}
 	ov := x.overridePath(a.Service)
-	if err := x.writeFile(ctx, ov, serviceOverride(x.baseName(), s.Service, a.Service)); err != nil {
+	body := override.Service(x.baseName(), s.Service, a.Service, a.Tag)
+	if err := x.writeFile(ctx, ov, body); err != nil {
 		return fmt.Errorf("deploy %s: write override: %w", a.Service, err)
 	}
 	x.logf("deploy service %s on %s (%s)", a.Service, a.Host, a.Tag)
