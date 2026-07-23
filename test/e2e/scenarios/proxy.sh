@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# scenario_proxy: zero-downtime cutover through the nginx fixture.
-# See KNOWN RISK in the plan/spec: the v2 (overlap) deploy is expected to fail
-# at "start green" on a host-port collision, leaving v1 serving with no blip.
+# scenario_proxy: zero-downtime cutover through the nginx fixture. The v2 deploy
+# brings green up alongside blue, probes it over the docker network, flips nginx,
+# then stops blue — no blip, and v2 must land (issue #13 resolved).
 scenario_proxy() {
   local ns="proxy-$$"
   local dy; dy="$(mktemp)"
@@ -34,21 +34,17 @@ scenario_proxy() {
   runc "touch $stopf"           # cutover attempt done → stop the probe
   wait "$probe_pid" 2>/dev/null || true
   runc "rm -f $stopf" || true
-  # grep -c prints the count and exits 1 when it is 0; `|| true` swallows that
-  # exit without appending a second value (a stray `echo 0` would corrupt the
-  # integer test below).
   local fails; fails="$(grep -c x "$hits" 2>/dev/null || true)"
 
   echo "no-blip: $fails failed requests across the cutover window"
   [ "$fails" -eq 0 ] || { echo "FAIL: blip detected ($fails failures)"; down_fixture "$ns"; rm -f "$dy" "$hits"; return 1; }
 
-  if [ "$v2_rc" -eq 0 ]; then
-    assert_version "$nginx/version" v2
-    echo "note: proxy overlap SUCCEEDED — the KNOWN RISK did not reproduce"
-  else
-    assert_version "$nginx/version" v1
-    echo "note: KNOWN RISK reproduced — v2 overlap deploy failed (rc=$v2_rc), v1 still serving; file a dockrail issue"
+  if [ "$v2_rc" -ne 0 ]; then
+    echo "FAIL: v2 proxy overlap deploy failed (rc=$v2_rc)"
+    runc "TAG=v2 docker compose -f $TARGET_DIR/compose-proxy.yml down >/dev/null 2>&1" || true
+    down_fixture "$ns"; rm -f "$dy" "$hits"; return 1
   fi
+  assert_version "$nginx/version" v2
 
   runc "TAG=v2 docker compose -f $TARGET_DIR/compose-proxy.yml down >/dev/null 2>&1" || true
   down_fixture "$ns"

@@ -89,6 +89,11 @@ All under `test/e2e/` unless noted.
    failures across the flip window, and `/version` now = v2. Warm the probe ~1s
    before cutover so we measure the flip, not startup.
 
+> **Resolved (issue #13):** proxy-path color services no longer publish a host
+> port; nginx routes to them by container name and readiness probes them at
+> their container IP, so the v2 overlap deploy completes. The scenario asserts
+> v2 lands with zero blip.
+
 2. **Recreate (blip) deploy.** `:v1` → `:v2` via `cutover: {strategy: recreate}`.
    Assert the command exits 0 (readiness gated) and `/version` = v2 afterward.
 
