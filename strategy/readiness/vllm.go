@@ -36,9 +36,9 @@ func newVLLM(r config.Readiness, model string) (*VLLM, error) {
 	return &VLLM{Port: port, Model: model, Timeout: timeout, retryEvery: 2 * time.Second}, nil
 }
 
-func (p *VLLM) Probe(ctx context.Context, conn connection.Connection) error {
-	health := fmt.Sprintf("curl -fsS -m 5 http://localhost:%d/health >/dev/null", p.Port)
-	models := fmt.Sprintf("curl -fsS -m 5 http://localhost:%d/v1/models", p.Port)
+func (p *VLLM) Probe(ctx context.Context, conn connection.Connection, host string) error {
+	health := fmt.Sprintf("curl -fsS -m 5 http://%s:%d/health >/dev/null", host, p.Port)
+	models := fmt.Sprintf("curl -fsS -m 5 http://%s:%d/v1/models", host, p.Port)
 	deadline := time.Now().Add(p.Timeout)
 	var lastErr error
 	for time.Now().Before(deadline) {

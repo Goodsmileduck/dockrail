@@ -3,11 +3,10 @@ networks:
     name: dockrail-e2e-net
     external: true
 services:
+  # Proxy-path color services do NOT publish host ports: nginx reaches them by
+  # container name over the shared bridge, and readiness probes them at their
+  # container IP (issue #13). Both colors listen on the same container port.
   web-blue:
     image: "${IMAGE:-dockrail-e2e-app}:${TAG:-v1}"
-    ports:
-      - "8080:8080"
   web-green:
     image: "${IMAGE:-dockrail-e2e-app}:${TAG:-v1}"
-    ports:
-      - "8080:8080"   # same host port as blue → the KNOWN RISK collision

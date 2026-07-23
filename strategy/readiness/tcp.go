@@ -29,9 +29,9 @@ func newTCP(r config.Readiness) (*TCP, error) {
 	return &TCP{Port: r.Port, Timeout: timeout, retryEvery: 2 * time.Second}, nil
 }
 
-func (p *TCP) Probe(ctx context.Context, conn connection.Connection) error {
+func (p *TCP) Probe(ctx context.Context, conn connection.Connection, host string) error {
 	// bash's /dev/tcp pseudo-device opens a connection; redirect closes it.
-	cmd := fmt.Sprintf("timeout 5 bash -c '</dev/tcp/localhost/%d' 2>/dev/null", p.Port)
+	cmd := fmt.Sprintf("timeout 5 bash -c '</dev/tcp/%s/%d' 2>/dev/null", host, p.Port)
 	deadline := time.Now().Add(p.Timeout)
 	var lastErr error
 	for time.Now().Before(deadline) {

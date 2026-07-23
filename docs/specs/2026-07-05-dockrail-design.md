@@ -198,6 +198,9 @@ Notes:
   blip, simplest) and `proxy` (zero-downtime via a proxy driver; v1 driver =
   `nginx-upstream`). `warmup: true` on `proxy` starts NEW, warms it up, then
   flips — what used to be called blue-green.
+  Proxy-path color services must not host-publish the shared service port: nginx
+  reaches them by container name over the shared bridge and readiness probes them
+  at their container IP (issue #13). Both colors listen on the same container port.
 - **Image tag = code version; mount path = model version** — two independent,
   explicit axes (inherited from the June spec).
 - **`x-` extension keys** — any top-level key prefixed `x-` is ignored by

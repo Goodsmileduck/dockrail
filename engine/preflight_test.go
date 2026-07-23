@@ -59,3 +59,38 @@ func TestPreflightCollectsAllFailures(t *testing.T) {
 		t.Fatalf("want 2 errors, got %v", errs)
 	}
 }
+
+func proxyCfg() *config.Config {
+	return &config.Config{
+		Compose: "docker-compose.yml",
+		Services: map[string]config.Service{
+			"web": {Cutover: config.Cutover{Strategy: "proxy", Proxy: "nginx"}},
+		},
+	}
+}
+
+func TestPreflightFlagsSharedColorPort(t *testing.T) {
+	f := connection.NewFake()
+	f.Stub("config --format json",
+		`{"services":{"web-blue":{"ports":[{"published":"8080","target":8080}]},`+
+			`"web-green":{"ports":[{"published":"8080","target":8080}]}}}`, nil)
+	errs := Preflight(context.Background(), f, proxyCfg())
+	joined := ""
+	for _, e := range errs {
+		joined += e.Error() + "\n"
+	}
+	if !strings.Contains(joined, "8080") || !strings.Contains(joined, "web-green") {
+		t.Fatalf("want a shared-port collision error mentioning 8080, got: %s", joined)
+	}
+}
+
+func TestPreflightAllowsUnpublishedColors(t *testing.T) {
+	f := connection.NewFake()
+	f.Stub("config --format json",
+		`{"services":{"web-blue":{"ports":[]},"web-green":{"ports":[]}}}`, nil)
+	for _, e := range Preflight(context.Background(), f, proxyCfg()) {
+		if strings.Contains(e.Error(), "host port") {
+			t.Fatalf("unpublished colors must not trip the collision guard: %v", e)
+		}
+	}
+}

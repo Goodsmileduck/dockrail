@@ -18,7 +18,7 @@ func TestVLLMProbeChecksHealthAndModel(t *testing.T) {
 	f := connection.NewFake()
 	f.Stub("/health", "", nil)                                  // server up
 	f.Stub("/v1/models", `{"data":[{"id":"Qwen2.5-VL"}]}`, nil) // model served
-	if err := p.Probe(context.Background(), f); err != nil {
+	if err := p.Probe(context.Background(), f, "10.0.0.5"); err != nil {
 		t.Fatalf("probe: %v", err)
 	}
 	all := strings.Join(f.Commands, "\n")
@@ -35,7 +35,7 @@ func TestVLLMProbeFailsWhenModelAbsent(t *testing.T) {
 	f := connection.NewFake()
 	f.Stub("/health", "", nil)
 	f.Stub("/v1/models", `{"data":[{"id":"other-model"}]}`, nil) // wrong model
-	if err := p.Probe(context.Background(), f); err == nil {
+	if err := p.Probe(context.Background(), f, "10.0.0.5"); err == nil {
 		t.Fatal("want failure when configured model is not served")
 	}
 }
@@ -47,7 +47,7 @@ func TestVLLMProbeHealthOnlyWhenNoModel(t *testing.T) {
 	}
 	f := connection.NewFake()
 	f.Stub("/health", "", nil)
-	if err := p.Probe(context.Background(), f); err != nil {
+	if err := p.Probe(context.Background(), f, "10.0.0.5"); err != nil {
 		t.Fatalf("probe: %v", err)
 	}
 	if strings.Contains(strings.Join(f.Commands, "\n"), "/v1/models") {
