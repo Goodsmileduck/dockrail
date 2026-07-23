@@ -1,0 +1,13 @@
+networks:
+  default:
+    name: dockrail-e2e-net
+    external: true
+services:
+  web-blue:
+    image: "${IMAGE:-dockrail-e2e-app}:${TAG:-v1}"
+    ports:
+      - "8080:8080"
+  web-green:
+    image: "${IMAGE:-dockrail-e2e-app}:${TAG:-v1}"
+    ports:
+      - "8080:8080"   # same host port as blue → the KNOWN RISK collision

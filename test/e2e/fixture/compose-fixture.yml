@@ -1,0 +1,6 @@
+# The shared network is created by lib.sh `up_network`; this file documents it
+# and lets `docker compose -f compose-fixture.yml config` validate the name.
+networks:
+  default:
+    name: dockrail-e2e-net
+    external: true
